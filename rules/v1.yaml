@@ -1,0 +1,15 @@
+# RedScore rules, version 1 = values in docs/redscore-spec.md.
+# Do not edit in place: copy to v2.yaml, change `version`, confirm with Heet, then re-score stored GENs.
+version: rules-v1
+weights:              # per mapped step, sums to 1.0
+  keyword: 0.3        # same keyword (code)
+  element: 0.4        # same element (LLM)
+  variables: 0.2      # same variables after mapping, nothing hard-coded (code)
+  intent: 0.1         # same intent (LLM)
+penalties:            # points off the Base Score
+  out_of_sequence: 5  # per step
+  missing_variable: 5 # per GT variable with no GEN partner
+  logic_block: 10     # per GT IF/ELSE, FOR_EACH, WHEN, UNTIL, WAIT_UNTIL mismatch
+  critical_step: 30   # per missing critical GT step
+pass_mark: 90         # a run passes at Final Score >= pass_mark
+runs_per_task: 3

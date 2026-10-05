@@ -1,0 +1,39 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Run artefacts, SQLite DB, LLM mapping cache
+results/
+
+# Inputs (redflows, text, videos/PDF assets) stay local
+*.redflow
+*.txt
+*.mp4
+*.mov
+*.webm
+tasks/**/*.pdf
+
+# claude.ai export: keep only the extracted transcripts and generated code.
+# The raw export holds unrelated personal chats, account metadata and ~24MB of artifact bundles.
+docs/old-chat/*
+!docs/old-chat/transcripts/
+!docs/old-chat/generated-files/
+
+# OS / editor
+.DS_Store
+.idea/
+.claude/settings.local.json
