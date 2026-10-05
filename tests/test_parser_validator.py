@@ -51,11 +51,42 @@ def test_misplaced_critical_marker_warns():
 
 
 def test_else_and_operators():
-    s = parse('STEPS\n    - IF $x != "a"\n        - CLICK ON "A" INTENT "a"\n    - ELSE\n'
+    s = parse('STEPS\n    - IF $x NOT_EQUALS "a"\n        - CLICK ON "A" INTENT "a"\n    - ELSE\n'
               '        - CLICK ON "B" INTENT "b"\n$x = "a"\n')
     b = s.blocks[0]
     assert b.op == "NOT_EQUALS"
     assert [a.path for a in s.actions] == [(("B1", "then"),), (("B1", "else"),)]
+
+
+def test_elif_is_an_if_inside_the_previous_else():
+    s = parse((ROOT / "tests/fixtures/syntax_ref/g_elif.redflow").read_text())
+    b1, b2 = s.blocks
+    assert (b2.kind, b2.is_elif, b2.path) == ("IF", True, (("B1", "else"),))
+    assert b2.condition_text() == 'ELIF $department EQUALS "Support"'
+    assert [a.path for a in s.actions] == [(("B1", "then"),), (("B1", "else"), ("B2", "then")),
+                                           (("B1", "else"), ("B2", "else"))]
+
+
+def test_new_constructs_parse():
+    s = parse((ROOT / "tests/fixtures/syntax_ref/l_map_loop.redflow").read_text())
+    assert s.variables["access"].kind == "map"
+    assert s.variables["access"].value["Operating"] == ["Send money"]
+    assert s.variables["access"].value["Archive"] == []
+    outer = s.blocks[0]
+    assert (outer.key_var, outer.item_var, outer.list_var) == ("account", "permissions", "access")
+    s = parse((ROOT / "tests/fixtures/syntax_ref/j_grab.redflow").read_text())
+    grabs = [a for a in s.actions if a.grab_var]
+    assert [(a.keyword, a.grab_var, a.grab_list) for a in grabs] == [
+        ("GRAB", "confirm_kw", False), ("GRAB", "status", False), ("GRAB ALL", "subs", True)]
+    assert grabs[1].possible_values == ["Active", "Suspended"] and grabs[0].action_vars() == []
+    s = parse((ROOT / "tests/fixtures/syntax_ref/n_wait_goto_login.redflow").read_text())
+    assert s.url == "CONTINUE_FROM_LOGIN"
+    assert [a.keyword for a in s.actions][2:] == ["WAIT", "GOTO", "DOUBLE_CLICK", "RIGHT_CLICK", "UPLOAD"]
+    assert s.actions[2].seconds == 30
+    s = parse('STEPS\n    - BROWSER_FIND $email\n    - FOR_EACH $r IN $roles EXECUTE_PARALLEL\n'
+              '        - CLICK ON "$r" INTENT "Tick $r"\n$email = "a"\n$roles = ["x"]\n')
+    assert (s.actions[0].keyword, s.actions[0].value_var, s.actions[0].intent) == ("BROWSER_FIND", "email", None)
+    assert s.blocks[0].parallel and s.blocks[0].condition_text() == "FOR_EACH $r IN $roles EXECUTE_PARALLEL"
 
 
 def test_extraction_steps_are_numbered():
@@ -85,10 +116,93 @@ BASE = 'URL "https://x"\nSTEPS\n{steps}\n{vars}\n'
     ('    - IF $x LIKE "a"\n        - CLICK ON "A" INTENT "a"', '$x = "a"', "E_CONDITION_SYNTAX"),
     ('    - CLICK ON "A" INTENT "a"', '$x = "a"\n$x = "b"', "E_VAR_DUPLICATE"),
     ('    - CLICK ON "A" INTENT "a"', "$x = a", "E_VAR_VALUE"),
+    # comparisons, IN, ELIF
+    ('    - IF $x == "a"\n        - CLICK ON "A" INTENT "a"', '$x = "a"', "E_OPERATOR_SYMBOL"),
+    ('    - IF $x != "a"\n        - CLICK ON "A" INTENT "a"', '$x = "a"', "E_OPERATOR_SYMBOL"),
+    ('    - IF $x IN ["a", "b"]\n        - CLICK ON "A" INTENT "a"', '$x = "a"', "E_IN_LITERAL"),
+    ('    - IF $x IN $y\n        - CLICK ON "A" INTENT "a"', '$x = "a"\n$y = "b"', "E_IN_NOT_LIST"),
+    ('    - CLICK ON "A" INTENT "a"\n    - ELIF $x EQUALS "a"\n        - CLICK ON "B" INTENT "b"', '$x = "a"',
+     "E_ELIF_ORPHAN"),
+    ('    - WHEN "a popup"\n        - CLICK ON "A" INTENT "a"\n    - ELIF $x EQUALS "a"\n'
+     '        - CLICK ON "B" INTENT "b"', '$x = "a"', "E_ELIF_AFTER_WHEN"),
+    ('    - IF $x EQUALS "a"\n        - CLICK ON "A" INTENT "a"\n    - ELSE\n        - CLICK ON "B" INTENT "b"\n'
+     '    - ELIF $x EQUALS "b"\n        - CLICK ON "C" INTENT "c"', '$x = "a"', "E_ELIF_ORPHAN"),
+    ('    - IF $x EQUALS "a"\n        - CLICK ON "A" INTENT "a"\n    - ELIF $x EQUALS "b"', '$x = "a"', "E_EMPTY_BODY"),
+    # FOR_EACH, EXECUTE_PARALLEL
+    ('    - FOR_EACH $r IN $x\n        - CLICK ON "$r" INTENT "$r"', '$x = "a"', "E_FOR_EACH_SCALAR"),
+    ('    - FOR_EACH $r IN $roles PARALLEL\n        - CLICK ON "$r" INTENT "$r"', '$roles = ["a"]', "E_FOR_EACH_SUFFIX"),
+    ('    - EXECUTE_PARALLEL', "", "E_PARALLEL_STANDALONE"),
+    # maps
+    ('    - FOR_EACH $v IN $m\n        - CLICK ON "$v" INTENT "$v"', '$m["a"] = "x"', "E_FOR_EACH_MAP"),
+    ('    - FOR_EACH $k, $v IN $m EXECUTE_PARALLEL\n        - CLICK ON "$v" INTENT "$v"', '$m["a"] = "x"',
+     "E_PARALLEL_MAP"),
+    ('    - FOR_EACH $k, $vs IN $m\n        - FOR_EACH $v IN $vs EXECUTE_PARALLEL\n'
+     '            - CLICK ON "$v" INTENT "$v"', '$m["a"] = ["x"]', "E_PARALLEL_MAP"),
+    ('    - FOR_EACH $k, $k IN $m\n        - CLICK ON "$k" INTENT "$k"', '$m["a"] = "x"', "E_MAP_LOOP_NAMES"),
+    ('    - FOR_EACH $x, $v IN $m\n        - CLICK ON "$v" INTENT "$v $x"', '$m["a"] = "x"\n$x = "a"',
+     "E_LOOP_VAR_DEFINED"),
+    ('    - FOR_EACH $k, $v IN $roles\n        - CLICK ON "$v" INTENT "$v $k"', '$roles = ["a"]', "E_MAP_LOOP_NOT_MAP"),
+    ('    - CLICK ON "Grant $m" INTENT "Grant $m"', '$m["a"] = "x"', "E_MAP_USAGE"),
+    ('    - CLICK ON "Grant $m[Reserve]" INTENT "Grant"', '$m["Reserve"] = "x"', "E_MAP_KEY_READ"),
+    ('    - FOR_EACH $k, $vs IN $m\n        - CLICK ON "$vs" INTENT "$vs $k"', '$m["a"] = ["x"]\n$m["b"] = "y"',
+     "E_MAP_VALUE_TEXT"),
+    ('    - FOR_EACH $k, $v IN $m\n        - IF $k EXISTS\n            - CLICK ON "$v" INTENT "$v"', '$m["a"] = "x"',
+     "E_MAP_LOOP_TEST"),
+    ('    - CLICK ON "A" INTENT "a"', '$m[$r] = ["x"]', "E_MAP_KEY_VAR"),
+    ('    - CLICK ON "A" INTENT "a"', '$m[Petty cash] = ["x"]', "E_MAP_KEY_QUOTES"),
+    ('    - CLICK ON "A" INTENT "a"', '$m["a"]["b"] = "x"', "E_MAP_NESTED"),
+    ('    - CLICK ON "A" INTENT "a"', '$m["a"] = EMPTY', "E_MAP_EMPTY"),
+    ('    - CLICK ON "A" INTENT "a"', '$m = {"a": ["x"]}', "E_MAP_OBJECT"),
+    ('    - CLICK ON "A" INTENT "a"', '$m["a"] = "x"\n$m[a] = "y"', "E_MAP_DUP_KEY"),
+    ('    - CLICK ON "A" INTENT "a"', '$m = "x"\n$m["a"] = "y"', "E_MAP_CONFLICT"),
+    ('    - CLICK ON "A" INTENT "a"', '$m["a"] = "x"\n$m = "y"', "E_MAP_CONFLICT"),
+    ('    - CLICK ON "A" INTENT "a"', '$m?["a"] = "x"\n$m["b"] = "y"', "E_MAP_OPTIONAL"),
+    # GRAB
+    ('    - GRAB ALL "rows" INTO $rows INTENT "Read rows"', "", "E_GRAB_ALL_LIST"),
+    ('    - GRAB "row" INTO $rows[] INTENT "Read rows"', "", "E_GRAB_LIST"),
+    ('    - GRAB ALL "rows" INTO $rows[] INTENT "Read" POSSIBLE_VALUES ["a"]', "", "E_GRAB_ALL_VALUES"),
+    ('    - GRAB "status" INTO $s INTENT "Read" POSSIBLE_VALUES []', "", "E_GRAB_VALUES"),
+    ('    - GRAB "status" INTO $s INTENT "Read" POSSIBLE_VALUES [""]', "", "E_GRAB_VALUES"),
+    ('    - GRAB "status" INTO $s', "", "E_NO_INTENT"),
+    ('    - GRAB "status" INTO $x INTENT "Read"', '$x = "a"', "E_GRAB_TARGET"),
+    ('    - WHEN "a dialog"\n        - GRAB "word" INTO $w INTENT "Read"\n    - FILL $w INTO "Box" INTENT "Type $w"', "",
+     "E_VAR_UNDEFINED"),
+    ('    - GRAB "status" INTO $s INTENT "Read"\n    - IF $s EXISTS\n        - CLICK ON "A" INTENT "a"', "",
+     "E_GRAB_EXISTS"),
+    # BROWSER_FIND, WAIT, GOTO, URL, SELECT, new clicks
+    ('    - BROWSER_FIND "rico@x.com"', "", "E_BROWSER_FIND_VALUE"),
+    ('    - BROWSER_FIND $e INTENT "Find $e"', '$e = "a"', "E_INTENT_NOT_ALLOWED"),
+    ('    - BROWSER_FIND $e\n        - CLICK ON "A" INTENT "a"', '$e = "a"', "E_UNEXPECTED_NESTING"),
+    ('    - BROWSER_FIND $e', "", "E_VAR_UNDEFINED"),
+    ('    - WAIT 0', "", "E_WAIT_SECONDS"),
+    ('    - WAIT 2.5', "", "E_WAIT_SECONDS"),
+    ('    - WAIT "30"', "", "E_WAIT_SECONDS"),
+    ('    - WAIT 30 INTENT "slow page"', "", "E_INTENT_NOT_ALLOWED"),
+    ('    - GOTO "https://x" INTENT "go"', "", "E_INTENT_NOT_ALLOWED"),
+    ('    - GOTO CONTINUE_FROM_LOGIN', "", "E_GOTO_LOGIN"),
+    ('    - SELECT "Sales Rep" FROM "Role dropdown" INTENT "Assign the role"', "", "E_SELECT_LITERAL"),
+    ('    - SELECT "$role" FROM "Role dropdown" INTENT "Assign the role $role"', '$role = "a"', "E_SELECT_LITERAL"),
+    ('    - DOUBLE_CLICK ON "Row"', "", "E_NO_INTENT"),
+    ('    - UPLOAD $file INTO "Upload area" INTENT "Upload the file"', '$file = "v://a"', "E_INTENT_BINDING"),
 ])
 def test_invalid_action_scripts(steps, vars_, code):
     issues = validate(BASE.format(steps=steps, vars=vars_))
     assert code in {i.code for i in errors(issues)}, [i.to_dict() for i in issues]
+
+
+@pytest.mark.parametrize("src,code", [
+    ('URL CONTINUE_FROM_LOGIN "https://x"\nSTEPS\n    - CLICK ON "A" INTENT "a"\n', "E_URL_SYNTAX"),
+    ('URL https://x\nSTEPS\n    - CLICK ON "A" INTENT "a"\n', "E_URL_SYNTAX"),
+])
+def test_invalid_url_lines(src, code):
+    assert code in {i.code for i in errors(validate(src))}
+
+
+def test_grab_value_is_usable_later_at_same_level_or_deeper():
+    src = ('STEPS\n    - GRAB "the word" INTO $w INTENT "Read the word"\n'
+           '    - IF $w IN $allowed\n        - FILL $w INTO "Box" INTENT "Type $w"\n'
+           '    - FILL $w INTO "Box" INTENT "Type $w"\n$allowed = ["a"]\n')
+    assert errors(validate(src)) == []
 
 
 def test_element_variable_missing_from_intent_is_only_a_warning():

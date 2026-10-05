@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -37,6 +38,43 @@ def test_rescore_reuses_stored_mappings(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "run 3: Base  77.8  Final  17.8" in out
     assert (tmp_path / "venus-jml-create-account/spec-example/run_3/score_rules-test.json").exists()
+
+
+def test_task_writes_history_folder(tmp_path, capsys):
+    _run_venus(tmp_path)
+    (hist,) = (tmp_path / "history").iterdir()
+    assert hist.name.endswith("_venus-jml-create-account_spec-example_rules-v1")
+    assert f"history: {hist}" in capsys.readouterr().out
+    assert {p.name for p in hist.iterdir()} == {"summary.json", "run_1.json", "run_2.json", "run_3.json"}
+    summary = json.loads((hist / "summary.json").read_text())
+    assert summary["execution"]["status"] == "ok"
+    assert summary["execution"]["command"].startswith("redscore task --task")
+    assert summary["result"]["task_score"] == 60.93
+    assert summary["rules"]["penalties"]["critical_step"] == 30
+    assert summary["runs"][2]["biggest_cuts"][0]["what"] == "critical_step GT9"
+
+
+def test_history_cuts_add_up_to_final(tmp_path):
+    _run_venus(tmp_path)
+    (hist,) = (tmp_path / "history").iterdir()
+    for n in (1, 2, 3):
+        run = json.loads((hist / f"run_{n}.json").read_text())
+        why, score = run["explanation"], run["score"]
+        base_cuts = sum(c["points"] for c in why["cuts"] if c["stage"] != "penalty")
+        assert abs(100 - base_cuts - score["base"]) < 0.05
+        assert abs(100 - sum(c["points"] for c in why["cuts"]) - score["final"]) < 0.05
+        assert run["mapping_source"].startswith("fixture:")
+    run1 = json.loads((hist / "run_1.json").read_text())["explanation"]
+    assert {c["what"] for c in run1["cuts"]} >= {"GT3 keyword", "GT6 variables", "GT8 missing", "GEN9 extra",
+                                                  "out_of_sequence GT5", "missing_variable $role",
+                                                  "logic_block B1"}
+
+
+def test_rescore_writes_its_own_history(tmp_path):
+    _run_venus(tmp_path)
+    main(["rescore", "--rules", str(ROOT / "rules" / "v1.yaml"), "--tasks", str(TASKS), "--results", str(tmp_path)])
+    names = sorted(p.name for p in (tmp_path / "history").iterdir())
+    assert len(names) == 2 and names[1].endswith("_rescore")
 
 
 def test_task_folder_without_gt_is_a_clean_error(tmp_path, capsys):

@@ -53,7 +53,9 @@ def llm_mapper(prompt_name: str = DEFAULT_PROMPT, cache_dir: Path = DEFAULT_CACH
     cache_dir = Path(cache_dir)
 
     def mapper(gt: Script, gen: Script) -> Mapping:
-        key = hashlib.sha256("\x00".join([model, prompt_version, gt.source, gen.source]).encode()).hexdigest()
+        prompt = build_prompt(gt, gen, template)
+        # Key on what the LLM actually sees, so blank lines, comments and the URL line reuse the cached mapping.
+        key = hashlib.sha256("\x00".join([model, prompt_version, prompt]).encode()).hexdigest()
         meta = {"source": "llm", "model": model, "prompt_version": prompt_version, "cache_key": key,
                 "temperature": 0}
         path = cache_dir / f"{key}.json"
@@ -63,9 +65,9 @@ def llm_mapper(prompt_name: str = DEFAULT_PROMPT, cache_dir: Path = DEFAULT_CACH
         if offline:
             raise MappingError(f"no cached mapping for this GT/GEN/model/prompt (key {key[:12]})")
 
-        prompt = build_prompt(gt, gen, template)
-        messages = [{"role": "user", "content": prompt}]
+        messages =[{"role": "user", "content": prompt}]
         last_err = None
+        failed = []                       # kept in the cache so run history shows rejected answers
         for attempt in range(2):          # one retry, with the error fed back
             raw = _chat(model, messages)
             try:
@@ -73,12 +75,14 @@ def llm_mapper(prompt_name: str = DEFAULT_PROMPT, cache_dir: Path = DEFAULT_CACH
                 mapping = validate_mapping(gt, gen, data, dict(meta, cache="miss", attempts=attempt + 1))
             except MappingError as e:
                 last_err = e
+                failed.append({"raw": raw, "error": str(e)})
                 messages += [{"role": "assistant", "content": raw},
                              {"role": "user", "content": f"That answer is invalid: {e}. "
                                                          "Reply again with only the corrected JSON object."}]
                 continue
             cache_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"meta": meta, "prompt": prompt, "raw": raw, "data": data}, indent=2))
+            path.write_text(json.dumps({"meta": meta, "prompt": prompt, "raw": raw, "data": data,
+                                        "failed_attempts": failed}, indent=2))
             return mapping
         raise MappingError(f"LLM mapping failed after retry: {last_err}")
 

@@ -14,8 +14,8 @@ from .parser import RUNTIME_KINDS, Action, Block, Script
 
 @dataclass
 class VariableResult:
-    pairs: Dict[str, str]          # GT name -> GEN name (defined vars + FOR_EACH loop vars)
-    missing: List[str]             # GT defined vars with no GEN partner
+    pairs: Dict[str, str]          # GT name -> GEN name (defined vars, GRAB targets, FOR_EACH loop vars)
+    missing: List[str]             # GT defined vars with no GEN partner (GRAB targets and loop vars excluded)
     unpaired_gen: List[str]        # GEN defined vars with no GT partner (informational)
 
 
@@ -46,15 +46,26 @@ def pair_variables(gt: Script, gen: Script, mapping: Mapping) -> VariableResult:
             pairs[g] = n
             taken.add(n)
 
-    # FOR_EACH loop variables pair through their paired list variables.
+    # GRAB targets have no default value; they pair through their mapped GRAB steps.
+    for p in sorted(mapping.pairs, key=lambda p: p.gt):
+        g, n = gt.action(p.gt).grab_var, gen.action(p.gen).grab_var
+        if g and n and g not in pairs and n not in taken:
+            pairs[g] = n
+            taken.add(n)
+
+    # FOR_EACH loop variables (and a map loop's $key) pair through their paired list / map variables.
+    # Document order, so an outer map loop's $value is paired before a nested loop over it.
     for gb in gt.blocks:
         if gb.kind != "FOR_EACH" or gb.list_var not in pairs:
             continue
         for nb in gen.blocks:
-            if (nb.kind == "FOR_EACH" and nb.list_var == pairs[gb.list_var]
+            if (nb.kind == "FOR_EACH" and nb.list_var == pairs[gb.list_var] and bool(nb.key_var) == bool(gb.key_var)
                     and gb.item_var not in pairs and nb.item_var not in taken):
                 pairs[gb.item_var] = nb.item_var
                 taken.add(nb.item_var)
+                if gb.key_var and gb.key_var not in pairs and nb.key_var not in taken:
+                    pairs[gb.key_var] = nb.key_var
+                    taken.add(nb.key_var)
                 break
 
     missing = [g for g in gt.variables if g not in pairs]
@@ -63,6 +74,8 @@ def pair_variables(gt: Script, gen: Script, mapping: Mapping) -> VariableResult:
 
 
 def _norm_value(v):
+    if isinstance(v, dict):
+        return tuple(sorted((k.strip(), _norm_value(x)) for k, x in v.items()))
     if isinstance(v, list):
         return tuple(x.strip() for x in v)
     return v.strip() if isinstance(v, str) else v
@@ -151,8 +164,10 @@ def _branch_steps(script: Script, block_id: str, branch: str) -> Set[int]:
 def _condition_same(gb: Block, nb: Block, var_pairs: Dict[str, str], runtime: Dict[Tuple[str, str], bool]) -> bool:
     if gb.kind == "IF":
         return (var_pairs.get(gb.var) == nb.var and gb.op == nb.op
-                and (gb.literal or "") == (nb.literal or ""))
+                and (gb.literal or "") == (nb.literal or "")
+                and (var_pairs.get(gb.rhs_var) == nb.rhs_var if gb.rhs_var else nb.rhs_var is None))
     if gb.kind == "FOR_EACH":
+        # EXECUTE_PARALLEL only changes how the iterations are batched, not which steps run for which values.
         return var_pairs.get(gb.list_var) == nb.list_var
     return runtime.get((gb.id, nb.id), False)
 

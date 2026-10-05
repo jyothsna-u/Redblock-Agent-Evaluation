@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from .compare import compare, format_report
+from .history import History
 from .mapping import Mapper, MappingError, fixture_mapper, validate_mapping
 from .parser import parse
 from .rules import load_rules
@@ -87,23 +88,32 @@ def cmd_score(a) -> int:
     return 0
 
 
-def _score_and_store(store: Store, task: dict, version: str, runs, rules, mapper_for_run) -> dict:
+def _score_and_store(store: Store, task: dict, version: str, runs, rules, mapper_for_run,
+                     command=(), kind: str = "task") -> dict:
     gt = load_gt(task["gt_source"])
     print(f"{task['id']}  gen {version}  rules {rules.version}  critical: {_critical_label(gt.critical_steps)}")
+    history = History(store.root, task, version, rules, gt, command, kind)
     finals, bases, scored_at = [], [], None
-    for run, gen_source in runs:
-        res = score_run(gt, gen_source, rules, mapper_for_run(run))
-        store.save_run(task["id"], version, run, gen_source, res)
-        finals.append(res["final"])
-        bases.append(res["base"])
-        scored_at = res["scored_at"]
-        print(f"  run {run}: Base {res['base_display']:>5}  Final {res['final_display']:>5}"
-              + ("  SYNTAX FAIL" if not res["syntax"]["ok"] else "")
-              + (f"  critical missing {res['critical_missing']}" if res["critical_missing"] else ""))
+    try:
+        for run, gen_source in runs:
+            res = score_run(gt, gen_source, rules, mapper_for_run(run))
+            store.save_run(task["id"], version, run, gen_source, res)
+            history.add_run(run, gen_source, res)
+            finals.append(res["final"])
+            bases.append(res["base"])
+            scored_at = res["scored_at"]
+            print(f"  run {run}: Base {res['base_display']:>5}  Final {res['final_display']:>5}"
+                  + ("  SYNTAX FAIL" if not res["syntax"]["ok"] else "")
+                  + (f"  critical missing {res['critical_missing']}" if res["critical_missing"] else ""))
+    except Exception as e:
+        history.finish(None, None, error=f"{type(e).__name__}: {e}")
+        raise
     t = task_score(finals)
+    mean_base = sum(bases) / len(bases) if bases else None
     if t:
-        store.save_task(task["id"], version, rules.version, t, sum(bases) / len(bases), scored_at)
+        store.save_task(task["id"], version, rules.version, t, mean_base, scored_at)
         print(f"  Task Score {t['task_score_display']}  lowest {t['lowest_display']}  ({t['n_runs']} runs)")
+    print(f"  history: {history.finish(t, mean_base)}")
     return t
 
 
@@ -124,7 +134,7 @@ def cmd_task(a) -> int:
     mapper_for_run = (lambda run: fixture_mapper(Path(a.mappings) / f"mapping_run_{run}.json")) if a.mappings \
         else (lambda run: llm)
     _score_and_store(Store(Path(a.results)), task, a.gen_version,
-                     [(run, p.read_text()) for run, p in runs], rules, mapper_for_run)
+                     [(run, p.read_text()) for run, p in runs], rules, mapper_for_run, a.argv)
     return 0
 
 
@@ -146,7 +156,7 @@ def cmd_rescore(a) -> int:
                                                     dict(json.loads(path.read_text()).get("meta", {}), rescored=True))
 
         _score_and_store(store, task, version, [(run, (d / "gen.redflow").read_text()) for run, d in sorted(items)],
-                         rules, mapper_for_run)
+                         rules, mapper_for_run, a.argv, kind="rescore")
     return 0
 
 
@@ -196,6 +206,7 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_compare)
 
     a = p.parse_args(argv)
+    a.argv = list(argv) if argv is not None else sys.argv[1:]
     try:
         return a.fn(a)
     except (FileNotFoundError, InvalidGroundTruth, MappingError, RuntimeError) as e:

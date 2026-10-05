@@ -163,10 +163,68 @@ def _blocks(gen_src, pairs, runtime=None, gt_src=GT_IF):
     return check_blocks(gt, gen, m, pair_variables(gt, gen, m).pairs)
 
 
-def test_block_matches_with_renamed_variable_and_op_alias():
-    gen = ('STEPS\n    - CLICK ON "A" INTENT "a"\n    - IF $type == "x"\n        - CLICK ON "B" INTENT "b"\n'
+def test_block_matches_with_renamed_variable():
+    gen = ('STEPS\n    - CLICK ON "A" INTENT "a"\n    - IF $type EQUALS "x"\n        - CLICK ON "B" INTENT "b"\n'
            '    - ELSE\n        - CLICK ON "C" INTENT "c"\n$type = "x"\n')
     assert [b.ok for b in _blocks(gen, [(1, 1), (2, 2), (3, 3)])] == [True]
+
+
+GT_ELIF = ('STEPS\n    - IF $d EQUALS "Sales"\n        - CLICK ON "A" INTENT "a"\n'
+           '    - ELIF $d EQUALS "Support"\n        - CLICK ON "B" INTENT "b"\n'
+           '    - ELSE\n        - CLICK ON "C" INTENT "c"\n$d = "Support"\n')
+
+
+def test_elif_matches_the_same_chain_and_an_explicit_nested_if():
+    nested = ('STEPS\n    - IF $dept EQUALS "Sales"\n        - CLICK ON "A" INTENT "a"\n    - ELSE\n'
+              '        - IF $dept EQUALS "Support"\n            - CLICK ON "B" INTENT "b"\n'
+              '        - ELSE\n            - CLICK ON "C" INTENT "c"\n$dept = "Support"\n')
+    for gen in (GT_ELIF, nested):
+        assert [b.ok for b in _blocks(gen, [(1, 1), (2, 2), (3, 3)], gt_src=GT_ELIF)] == [True, True]
+
+
+def test_elif_with_wrong_condition_costs_one_block():
+    gen = GT_ELIF.replace('ELIF $d EQUALS "Support"', 'ELIF $d EQUALS "Help"')
+    assert [b.ok for b in _blocks(gen, [(1, 1), (2, 2), (3, 3)], gt_src=GT_ELIF)] == [True, False]
+
+
+def test_in_condition_compares_both_variables():
+    gt = ('STEPS\n    - IF $region IN $eu\n        - CLICK ON "A" INTENT "a"\n'
+          '$region = "Germany"\n$eu = ["Germany", "France"]\n')
+    same = gt.replace("$region", "$country").replace("$eu", "$eu_list")
+    other = gt + '$apac = ["Japan"]\n'
+    other = other.replace("IF $region IN $eu", "IF $region IN $apac")
+    assert [b.ok for b in _blocks(same, [(1, 1)], gt_src=gt)] == [True]
+    assert [b.ok for b in _blocks(other, [(1, 1)], gt_src=gt)] == [False]
+
+
+def test_grab_targets_pair_through_their_steps():
+    gt = ('STEPS\n    - GRAB "the keyword" INTO $kw INTENT "Read the keyword"\n'
+          '    - FILL $kw INTO "Confirm box" INTENT "Type $kw"\n')
+    gen = ('STEPS\n    - GRAB "the confirmation word" INTO $word INTENT "Read it"\n'
+           '    - FILL $word INTO "Confirm input" INTENT "Type $word"\n')
+    g, n = parse(gt), parse(gen)
+    m = Mapping([Pair(1, 1, True, True), Pair(2, 2, True, True)], [], [], [])
+    v = pair_variables(g, n, m)
+    assert v.pairs == {"kw": "word"} and v.missing == []
+    r = score_run(load_gt(gt), gen, RULES, lambda a, b: m)
+    assert r["final"] == 100.0
+
+
+def test_map_loop_variables_pair_through_the_map():
+    gt = (ROOT / "tests/fixtures/syntax_ref/l_map_loop.redflow").read_text()
+    gen = (gt.replace("$account", "$acct").replace("$permissions", "$perms")
+           .replace("$permission ", "$perm ").replace("$permission\"", "$perm\"").replace("$access", "$grants"))
+    g, n = parse(gt), parse(gen)
+    m = Mapping([Pair(1, 1, True, True)], [], [], [])
+    v = pair_variables(g, n, m)
+    assert v.pairs == {"access": "grants", "permissions": "perms", "account": "acct", "permission": "perm"}
+    assert all(b.ok for b in check_blocks(g, n, m, v.pairs))
+
+
+def test_execute_parallel_does_not_change_the_block_match():
+    gt = 'STEPS\n    - FOR_EACH $r IN $roles EXECUTE_PARALLEL\n        - CLICK ON "$r" INTENT "Tick $r"\n$roles = ["a"]\n'
+    gen = gt.replace(" EXECUTE_PARALLEL", "")
+    assert [b.ok for b in _blocks(gen, [(1, 1)], gt_src=gt)] == [True]
 
 
 def test_block_wrong_condition():

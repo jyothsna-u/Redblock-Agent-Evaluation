@@ -65,6 +65,19 @@ def test_llm_mapper_caches(env, monkeypatch):
         llm.llm_mapper(cache_dir=env / "empty", offline=True)(GT, GEN)
 
 
+def test_llm_cache_ignores_blank_lines_and_comments(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "_chat", lambda model, messages: calls.append(1) or json.dumps(GOOD))
+    mapper = llm.llm_mapper(cache_dir=env / "cache")
+    mapper(GT, GEN)
+    lines = GEN.source.splitlines()
+    padded = "\n".join(lines[:2] + ["", "   "] + [lines[2] + "   # a comment"] + lines[3:]) + "\n\n"
+    assert mapper(GT, parse(padded)).meta["cache"] == "hit"
+    edited = GEN.source.replace("Close button", "Close icon")
+    assert mapper(GT, parse(edited)).meta["cache"] == "miss"
+    assert len(calls) == 2
+
+
 def test_llm_mapper_retries_once_with_error(env, monkeypatch):
     answers = ['{"pairs": [{"gt": 1, "gen": 99, "same_element": true, "same_intent": true}]}', json.dumps(GOOD)]
     seen = []

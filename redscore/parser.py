@@ -9,37 +9,49 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
-ACTION_KEYWORDS = ("CLICK", "HOVER", "FILL", "FILL_AND_ENTER", "SELECT", "GOTO")
-BLOCK_KINDS = ("IF", "FOR_EACH", "WHEN", "UNTIL", "WAIT_UNTIL")
+ACTION_KEYWORDS = ("CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER", "FILL", "FILL_AND_ENTER", "SELECT", "UPLOAD",
+                   "GOTO", "WAIT", "BROWSER_FIND", "GRAB")
+NO_INTENT_KEYWORDS = ("GOTO", "WAIT", "BROWSER_FIND")
+BLOCK_KINDS = ("IF", "ELIF", "FOR_EACH", "WHEN", "UNTIL", "WAIT_UNTIL")
 RUNTIME_KINDS = ("WHEN", "UNTIL", "WAIT_UNTIL")
 INDENT = 4
 
-VAR_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+_NAME = r'([A-Za-z_][A-Za-z0-9_]*)'
+VAR_RE = re.compile(r"\$" + _NAME)
 _Q = r'"((?:[^"\\]|\\.)*)"'          # a double-quoted string, group = contents
-_VAL = r'(?:\$([A-Za-z_][A-Za-z0-9_]*)|' + _Q + r')'   # $var or "literal"
+_VAL = r'(?:\$' + _NAME + '|' + _Q + r')'   # $var or "literal"
 _INTENT = r'(?:\s+INTENT\s+' + _Q + r')?'
 
 _ACTION_PATTERNS = [
     ("CLICK", re.compile(r'^CLICK\s+ON\s+' + _Q + _INTENT + r'$')),
+    ("DOUBLE_CLICK", re.compile(r'^DOUBLE_CLICK\s+ON\s+' + _Q + _INTENT + r'$')),
+    ("RIGHT_CLICK", re.compile(r'^RIGHT_CLICK\s+ON\s+' + _Q + _INTENT + r'$')),
     ("HOVER", re.compile(r'^HOVER\s+ON\s+' + _Q + _INTENT + r'$')),
     ("FILL_AND_ENTER", re.compile(r'^FILL_AND_ENTER\s+' + _VAL + r'\s+INTO\s+' + _Q + _INTENT + r'$')),
     ("FILL", re.compile(r'^FILL\s+' + _VAL + r'\s+INTO\s+' + _Q + _INTENT + r'$')),
     ("SELECT", re.compile(r'^SELECT\s+' + _VAL + r'\s+FROM\s+' + _Q + _INTENT + r'$')),
+    ("UPLOAD", re.compile(r'^UPLOAD\s+' + _VAL + r'\s+INTO\s+' + _Q + _INTENT + r'$')),
     ("GOTO", re.compile(r'^GOTO\s+' + _Q + r'$')),
+    ("WAIT", re.compile(r'^WAIT\s+([1-9][0-9]*)$')),
+    ("BROWSER_FIND", re.compile(r'^BROWSER_FIND\s+\$' + _NAME + r'$')),
+    ("GRAB", re.compile(r'^GRAB\s+(ALL\s+)?' + _Q + r'\s+INTO\s+\$' + _NAME + r'(\[\])?' + _INTENT
+                        + r'(?:\s+POSSIBLE_VALUES\s+(\[.*\]))?$')),
 ]
-_IF_CMP = re.compile(r'^IF\s+\$([A-Za-z_][A-Za-z0-9_]*)\s+(EQUALS|==|NOT_EQUALS|!=)\s+' + _Q + r'$')
-_IF_UNARY = re.compile(r'^IF\s+\$([A-Za-z_][A-Za-z0-9_]*)\s+(EXISTS|NOT_EMPTY|EMPTY)$')
-_FOR_EACH = re.compile(r'^FOR_EACH\s+\$([A-Za-z_][A-Za-z0-9_]*)\s+IN\s+\$([A-Za-z_][A-Za-z0-9_]*)$')
+_COND_CMP = re.compile(r'^\$' + _NAME + r'\s+(EQUALS|NOT_EQUALS)\s+' + _Q + r'$')
+_COND_UNARY = re.compile(r'^\$' + _NAME + r'\s+(EXISTS|NOT_EMPTY|EMPTY)$')
+_COND_IN = re.compile(r'^\$' + _NAME + r'\s+IN\s+\$' + _NAME + r'$')
+_FOR_EACH = re.compile(r'^FOR_EACH\s+\$' + _NAME + r'\s+IN\s+\$' + _NAME + r'(\s+EXECUTE_PARALLEL)?$')
+_FOR_EACH_MAP = re.compile(r'^FOR_EACH\s+\$' + _NAME + r'\s*,\s*\$' + _NAME + r'\s+IN\s+\$' + _NAME
+                           + r'(\s+EXECUTE_PARALLEL)?$')
 _RUNTIME = re.compile(r'^(WHEN|UNTIL|WAIT_UNTIL)\s+' + _Q + r'$')
-_URL = re.compile(r'^URL\s+' + _Q + r'$')
-_VAR_DEF = re.compile(r'^\$([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*=\s*(.+)$')
+_URL = re.compile(r'^URL\s+(?:' + _Q + r'|(CONTINUE_FROM_LOGIN))$')
+_VAR_DEF = re.compile(r'^\$' + _NAME + r'(\?)?\s*=\s*(.+)$')
+_MAP_DEF = re.compile(r'^\$' + _NAME + r'(\?)?\[(.*)\]\s*=\s*(.+)$')
 _RES_TOP = re.compile(r'^RESOURCE:\s*' + _Q + r'\s+(IDENTIFIED_BY|JOIN\s+ON)\s+' + _Q + r'$')
 _RES_SHORT = re.compile(r'^RESOURCE:?\s*' + _Q + r'$')
 _FIELD = re.compile(r'^-\s*' + _Q + r'(\[\])?(?:\s+INSTRUCT\s+' + _Q + r')?(?:\s+POSSIBLE_VALUES\s+(\[.*\]))?$')
-
-_OP_NORMAL = {"==": "EQUALS", "!=": "NOT_EQUALS"}
 
 # `# critical` at the end of a GT action line marks the step that commits the change.
 CRITICAL_RE = re.compile(r"^#\s*critical\b", re.IGNORECASE)
@@ -65,16 +77,22 @@ class Action:
     keyword: str
     line: int
     text: str
-    value_var: Optional[str] = None       # FILL $x / SELECT $x
+    value_var: Optional[str] = None       # FILL $x / SELECT $x / UPLOAD $x / BROWSER_FIND $x
     value_literal: Optional[str] = None   # FILL "john" (hard-coded)
-    element: Optional[str] = None         # quoted target; URL for GOTO
+    element: Optional[str] = None         # quoted target; URL for GOTO; what to read for GRAB
     intent: Optional[str] = None
     num: int = 0                          # 1-based step number, document order
     path: Tuple[Tuple[str, str], ...] = ()  # ((block_id, "then"|"else"), ...) outermost first
     critical: bool = False                # line ends with `# critical`
+    grab_var: Optional[str] = None        # GRAB ... INTO $x: the variable the step defines
+    grab_list: bool = False               # GRAB ALL ... INTO $x[]
+    possible_values: Optional[List[str]] = None   # GRAB ... POSSIBLE_VALUES [...]
+    seconds: Optional[int] = None         # WAIT <seconds>
 
     def action_vars(self) -> List[str]:
-        """Variables used by the action itself (value + element), excluding the intent."""
+        """Variables used by the action itself (value + element), excluding the intent.
+
+        A GRAB target is defined by the step, not used by it, so it is not included."""
         out = [self.value_var] if self.value_var else []
         out += [v for v in vars_in(self.element) if v not in out]
         return out
@@ -87,14 +105,20 @@ class Action:
 
 @dataclass
 class Block:
+    """A logic block. ELIF is stored as an IF (is_elif=True) that is the only step of the previous
+    IF's ELSE branch, so `IF a / ELIF b / ELSE c` has the same tree as `IF a / ELSE (IF b / ELSE c)`."""
     kind: str                       # IF | FOR_EACH | WHEN | UNTIL | WAIT_UNTIL
     line: int
     text: str
     var: Optional[str] = None       # IF variable
-    op: Optional[str] = None        # EQUALS | NOT_EQUALS | EXISTS | EMPTY | NOT_EMPTY
+    op: Optional[str] = None        # EQUALS | NOT_EQUALS | EXISTS | EMPTY | NOT_EMPTY | IN
     literal: Optional[str] = None   # IF comparison literal
-    item_var: Optional[str] = None  # FOR_EACH $item
-    list_var: Optional[str] = None  # FOR_EACH ... IN $list
+    rhs_var: Optional[str] = None   # IF $x IN $list
+    is_elif: bool = False
+    item_var: Optional[str] = None  # FOR_EACH $item (or $value of a map loop)
+    key_var: Optional[str] = None   # FOR_EACH $key, $value IN $map
+    list_var: Optional[str] = None  # FOR_EACH ... IN $list (or $map)
+    parallel: bool = False          # FOR_EACH ... EXECUTE_PARALLEL
     condition: Optional[str] = None  # WHEN/UNTIL/WAIT_UNTIL natural-language condition
     then: List["Node"] = field(default_factory=list)
     else_: Optional[List["Node"]] = None
@@ -104,10 +128,11 @@ class Block:
 
     def condition_text(self) -> str:
         if self.kind == "IF":
-            lit = f' "{self.literal}"' if self.literal is not None else ""
-            return f"IF ${self.var} {self.op}{lit}"
+            rhs = f' "{self.literal}"' if self.literal is not None else f" ${self.rhs_var}" if self.rhs_var else ""
+            return f"{'ELIF' if self.is_elif else 'IF'} ${self.var} {self.op}{rhs}"
         if self.kind == "FOR_EACH":
-            return f"FOR_EACH ${self.item_var} IN ${self.list_var}"
+            loop = f"${self.key_var}, ${self.item_var}" if self.key_var else f"${self.item_var}"
+            return f"FOR_EACH {loop} IN ${self.list_var}" + (" EXECUTE_PARALLEL" if self.parallel else "")
         return f'{self.kind} "{self.condition}"'
 
 
@@ -155,26 +180,29 @@ class Extract:
 class Variable:
     name: str
     line: int
-    value: Union[str, List[str], None]   # None = EMPTY
+    value: Union[str, List[str], Dict[str, Union[str, List[str]]], None]   # None = EMPTY; dict = map
     optional: bool = False
 
     @property
     def kind(self) -> str:
         if self.value is None:
             return "empty"
+        if isinstance(self.value, dict):
+            return "map"
         return "list" if isinstance(self.value, list) else "scalar"
 
 
 @dataclass
 class Script:
     source: str
-    url: Optional[str] = None
+    url: Optional[str] = None             # the URL, or CONTINUE_FROM_LOGIN
     sections: List[Union[StepsSection, Resource, Extract]] = field(default_factory=list)
     variables: Dict[str, Variable] = field(default_factory=dict)
     actions: List[Action] = field(default_factory=list)
     blocks: List[Block] = field(default_factory=list)
     issues: List[Issue] = field(default_factory=list)
     duplicate_vars: List[Variable] = field(default_factory=list)
+    map_optional: Dict[str, Set[bool]] = field(default_factory=dict)   # map name -> `?` flags seen
 
     @property
     def is_extraction(self) -> bool:
@@ -270,8 +298,12 @@ def _parse_top(node: _Line, s: Script) -> None:
     if m:
         if s.url is not None:
             s.issues.append(Issue(node.no, "E_URL_DUP", "more than one URL line"))
-        s.url = m.group(1)
+        s.url = m.group(1) if m.group(1) is not None else m.group(2)
         _no_children(node, s)
+        return
+    if t == "URL" or t.startswith("URL "):
+        s.issues.append(Issue(node.no, "E_URL_SYNTAX",
+                              "URL takes a quoted URL or CONTINUE_FROM_LOGIN, and nothing else"))
         return
     if t == "STEPS":
         s.sections.append(StepsSection(node.no, _parse_steps(node.children, s)))
@@ -283,15 +315,27 @@ def _parse_top(node: _Line, s: Script) -> None:
         s.sections.append(_parse_resource(node, s))
         _no_children(node, s)
         return
+    m = _MAP_DEF.match(t)
+    if m:
+        _parse_map_entry(node, m, s)
+        _no_children(node, s)
+        return
     m = _VAR_DEF.match(t)
     if m:
         var = Variable(m.group(1), node.no, None, optional=bool(m.group(2)))
-        ok, value = _parse_value(m.group(3).strip())
-        if not ok:
+        text = m.group(3).strip()
+        ok, value = _parse_value(text)
+        if text.startswith("{"):
+            s.issues.append(Issue(node.no, "E_MAP_OBJECT",
+                                  f"${var.name}: declare a map one entry per line, e.g. ${var.name}[\"key\"] = [...]"))
+        elif not ok:
             s.issues.append(Issue(node.no, "E_VAR_VALUE",
                                   f"${var.name}: value must be \"text\", [\"a\", \"b\"] or EMPTY"))
         var.value = value
-        if var.name in s.variables:
+        prev = s.variables.get(var.name)
+        if prev is not None and prev.kind == "map":
+            s.issues.append(Issue(node.no, "E_MAP_CONFLICT", f"${var.name} cannot be both a map and a single value"))
+        elif prev is not None:
             s.duplicate_vars.append(var)
         else:
             s.variables[var.name] = var
@@ -319,6 +363,56 @@ def _parse_value(text: str):
     return False, None
 
 
+_MAP_KEY_QUOTED = re.compile(_Q)
+_MAP_KEY_BARE = re.compile(r'[^"\[\]$\s]+')
+
+
+def _parse_map_entry(node: _Line, m: "re.Match", s: Script) -> None:
+    """One `$name["key"] = value` line of a map variable (syntax reference 2.2)."""
+    name, optional, raw_key, text = m.group(1), bool(m.group(2)), m.group(3).strip(), m.group(4).strip()
+    no = node.no
+    if "][" in raw_key:
+        s.issues.append(Issue(no, "E_MAP_NESTED", f"${name}: maps are one level deep"))
+        return
+    if "$" in raw_key:
+        s.issues.append(Issue(no, "E_MAP_KEY_VAR", f"${name}: map keys are plain text; variables are not substituted"))
+        return
+    km = _MAP_KEY_QUOTED.fullmatch(raw_key)
+    if km:
+        key = km.group(1)
+    elif _MAP_KEY_BARE.fullmatch(raw_key):
+        key = raw_key
+    elif re.fullmatch(r'[^"\[\]$]+', raw_key):
+        s.issues.append(Issue(no, "E_MAP_KEY_QUOTES", f"${name}: a key with spaces needs quotes: [\"{raw_key}\"]"))
+        return
+    else:
+        s.issues.append(Issue(no, "E_MAP_KEY", f"${name}: malformed map key [{raw_key}]"))
+        return
+    ok, value = _parse_value(text)
+    if ok and value is None:
+        s.issues.append(Issue(no, "E_MAP_EMPTY", f"${name}[\"{key}\"]: use [] for a key with no values; "
+                                                 "EMPTY is not allowed as a map entry"))
+        return
+    if not ok:
+        s.issues.append(Issue(no, "E_VAR_VALUE", f"${name}[\"{key}\"]: value must be \"text\" or [\"a\", \"b\"]"))
+        return
+    var = s.variables.get(name)
+    if var is None:
+        var = s.variables[name] = Variable(name, no, {}, optional=optional)
+        s.map_optional[name] = set()
+    elif var.kind != "map":
+        s.issues.append(Issue(no, "E_MAP_CONFLICT", f"${name} cannot be both a map and a single value"))
+        return
+    if key in var.value:
+        s.issues.append(Issue(no, "E_MAP_DUP_KEY", f"${name}: key \"{key}\" is declared more than once"))
+        return
+    flags = s.map_optional[name]
+    if flags and optional not in flags:      # reported once, where the entries start to mix
+        s.issues.append(Issue(no, "E_MAP_OPTIONAL", f"${name}: mark every map entry with ? or none of them"))
+    flags.add(optional)
+    var.value[key] = value
+
+
 def _no_children(node: _Line, s: Script) -> None:
     for c in node.children:
         s.issues.append(Issue(c.no, "E_UNEXPECTED_NESTING", f"line cannot be nested here: {c.text!r}"))
@@ -332,15 +426,9 @@ def _parse_steps(lines: List[_Line], s: Script) -> List[Node]:
             s.issues.append(Issue(node.no, "E_STEP_DASH", f"step must start with '- ': {t!r}"))
             continue
         stmt = t[1:].strip()
-        if stmt == "ELSE":
-            prev = out[-1] if out else None
-            if isinstance(prev, Block) and prev.kind in ("IF", "WHEN") and prev.else_ is None:
-                prev.else_ = _parse_steps(node.children, s)
-                prev.else_line = node.no
-                if not node.children:
-                    s.issues.append(Issue(node.no, "E_EMPTY_BODY", "ELSE must have at least one nested step"))
-            else:
-                s.issues.append(Issue(node.no, "E_ELSE_ORPHAN", "ELSE must directly follow an IF or WHEN block"))
+        word = stmt.split()[0] if stmt.split() else ""
+        if word in ("ELSE", "ELIF"):
+            _parse_else(node, stmt, word, out, s)
             continue
         block = _parse_block_header(stmt, node.no)
         if block is not None:
@@ -355,16 +443,65 @@ def _parse_steps(lines: List[_Line], s: Script) -> List[Node]:
     return out
 
 
+def _chain_tail(prev: Optional[Node]) -> Optional[Block]:
+    """The last block of an IF / ELIF ... chain (or the block itself), which an ELIF / ELSE attaches to."""
+    while (isinstance(prev, Block) and prev.else_ is not None and len(prev.else_) == 1
+           and isinstance(prev.else_[0], Block) and prev.else_[0].is_elif):
+        prev = prev.else_[0]
+    return prev if isinstance(prev, Block) else None
+
+
+def _parse_else(node: _Line, stmt: str, word: str, out: List[Node], s: Script) -> None:
+    tail = _chain_tail(out[-1] if out else None)
+    open_tail = tail is not None and tail.else_ is None
+    if word == "ELSE":
+        if stmt != "ELSE":
+            s.issues.append(Issue(node.no, "E_ELSE_SYNTAX", "ELSE takes no condition"))
+            return
+        if not (open_tail and tail.kind in ("IF", "WHEN")):
+            s.issues.append(Issue(node.no, "E_ELSE_ORPHAN", "ELSE must directly follow an IF, ELIF or WHEN block"))
+            return
+        tail.else_ = _parse_steps(node.children, s)
+        tail.else_line = node.no
+        if not node.children:
+            s.issues.append(Issue(node.no, "E_EMPTY_BODY", "ELSE must have at least one nested step"))
+        return
+    if open_tail and tail.kind == "WHEN":
+        s.issues.append(Issue(node.no, "E_ELIF_AFTER_WHEN", "WHEN supports ELSE but not ELIF"))
+        return
+    if not (open_tail and tail.kind == "IF"):
+        s.issues.append(Issue(node.no, "E_ELIF_ORPHAN", "ELIF must directly follow an IF or another ELIF"))
+        return
+    block = _parse_block_header("IF" + stmt[len("ELIF"):], node.no)
+    if block is None or block.kind != "IF":
+        _step_error(stmt, node.no, s)
+        return
+    block.text, block.is_elif = stmt, True
+    block.then = _parse_steps(node.children, s)
+    tail.else_ = [block]
+    tail.else_line = node.no
+
+
 def _parse_block_header(stmt: str, no: int) -> Optional[Block]:
-    m = _IF_CMP.match(stmt)
-    if m:
-        return Block("IF", no, stmt, var=m.group(1), op=_OP_NORMAL.get(m.group(2), m.group(2)), literal=m.group(3))
-    m = _IF_UNARY.match(stmt)
-    if m:
-        return Block("IF", no, stmt, var=m.group(1), op=m.group(2))
+    if stmt.startswith("IF "):
+        cond = stmt[3:].strip()
+        m = _COND_CMP.match(cond)
+        if m:
+            return Block("IF", no, stmt, var=m.group(1), op=m.group(2), literal=m.group(3))
+        m = _COND_UNARY.match(cond)
+        if m:
+            return Block("IF", no, stmt, var=m.group(1), op=m.group(2))
+        m = _COND_IN.match(cond)
+        if m:
+            return Block("IF", no, stmt, var=m.group(1), op="IN", rhs_var=m.group(2))
+        return None
     m = _FOR_EACH.match(stmt)
     if m:
-        return Block("FOR_EACH", no, stmt, item_var=m.group(1), list_var=m.group(2))
+        return Block("FOR_EACH", no, stmt, item_var=m.group(1), list_var=m.group(2), parallel=bool(m.group(3)))
+    m = _FOR_EACH_MAP.match(stmt)
+    if m:
+        return Block("FOR_EACH", no, stmt, key_var=m.group(1), item_var=m.group(2), list_var=m.group(3),
+                     parallel=bool(m.group(4)))
     m = _RUNTIME.match(stmt)
     if m:
         return Block(m.group(1), no, stmt, condition=m.group(2))
@@ -378,22 +515,75 @@ def _parse_action(stmt: str, no: int, s: Script) -> Optional[Action]:
             continue
         if kw == "GOTO":
             return Action(kw, no, stmt, element=m.group(1))
-        if kw in ("CLICK", "HOVER"):
+        if kw == "WAIT":
+            return Action(kw, no, stmt, seconds=int(m.group(1)))
+        if kw == "BROWSER_FIND":
+            return Action(kw, no, stmt, value_var=m.group(1))
+        if kw == "GRAB":
+            a = _grab(m, stmt, no, s)
+        elif kw in ("CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER"):
             a = Action(kw, no, stmt, element=m.group(1), intent=m.group(2))
         else:
             a = Action(kw, no, stmt, value_var=m.group(1), value_literal=m.group(2),
                        element=m.group(3), intent=m.group(4))
+            if kw == "SELECT" and a.value_literal is not None:
+                s.issues.append(Issue(no, "E_SELECT_LITERAL",
+                                      "SELECT takes a $variable written without quotes, not a quoted value"))
         if a.intent is None:
-            s.issues.append(Issue(no, "E_NO_INTENT", f"{kw} requires an INTENT"))
+            s.issues.append(Issue(no, "E_NO_INTENT", f"{a.keyword} requires an INTENT"))
         return a
+    _step_error(stmt, no, s)
+    return None
+
+
+def _grab(m: "re.Match", stmt: str, no: int, s: Script) -> Action:
+    is_all, target, as_list, pv = bool(m.group(1)), m.group(3), bool(m.group(4)), m.group(6)
+    a = Action("GRAB ALL" if is_all else "GRAB", no, stmt, element=m.group(2), intent=m.group(5),
+               grab_var=target, grab_list=as_list)
+    if is_all and not as_list:
+        s.issues.append(Issue(no, "E_GRAB_ALL_LIST", f"GRAB ALL must write into a list: INTO ${target}[]"))
+    if as_list and not is_all:
+        s.issues.append(Issue(no, "E_GRAB_LIST", f"only GRAB ALL may write into a list (${target}[])"))
+    if pv is not None:
+        if is_all:
+            s.issues.append(Issue(no, "E_GRAB_ALL_VALUES", "POSSIBLE_VALUES cannot be used with GRAB ALL"))
+        ok, vals = _parse_value(pv)
+        if not ok or not isinstance(vals, list) or not vals or not all(v.strip() for v in vals):
+            s.issues.append(Issue(no, "E_GRAB_VALUES",
+                                  "POSSIBLE_VALUES must be a list with at least one non-empty quoted value"))
+        else:
+            a.possible_values = vals
+    return a
+
+
+def _step_error(stmt: str, no: int, s: Script) -> None:
+    """Report a step line that matched no action or block, as specifically as possible."""
     word = stmt.split()[0] if stmt.split() else ""
-    if word in ACTION_KEYWORDS:
+    rest = stmt[len(word):].strip()
+    if word in NO_INTENT_KEYWORDS and re.search(r'\sINTENT\s+"', stmt):
+        s.issues.append(Issue(no, "E_INTENT_NOT_ALLOWED", f"{word} takes no INTENT"))
+    elif word == "WAIT":
+        s.issues.append(Issue(no, "E_WAIT_SECONDS", "WAIT takes a whole number of seconds above 0, e.g. WAIT 30"))
+    elif word == "BROWSER_FIND":
+        s.issues.append(Issue(no, "E_BROWSER_FIND_VALUE",
+                              "BROWSER_FIND must be followed by a $variable only, not a quoted literal"))
+    elif word == "GOTO" and "CONTINUE_FROM_LOGIN" in rest:
+        s.issues.append(Issue(no, "E_GOTO_LOGIN", "CONTINUE_FROM_LOGIN only works on the URL line, not with GOTO"))
+    elif word in ("IF", "ELIF") and re.match(r'\$\w+\s+(==|!=)', rest):
+        s.issues.append(Issue(no, "E_OPERATOR_SYMBOL", "use EQUALS / NOT_EQUALS; == and != are not supported"))
+    elif word in ("IF", "ELIF") and re.match(r'\$\w+\s+IN\s+\[', rest):
+        s.issues.append(Issue(no, "E_IN_LITERAL", "the right-hand side of IN must be a list variable, not a literal list"))
+    elif word == "FOR_EACH" and re.match(r'\$\w+\s+IN\s+\$\w+\s+\S', rest):
+        s.issues.append(Issue(no, "E_FOR_EACH_SUFFIX", "only EXECUTE_PARALLEL may follow FOR_EACH $item IN $list"))
+    elif word == "EXECUTE_PARALLEL":
+        s.issues.append(Issue(no, "E_PARALLEL_STANDALONE",
+                              "EXECUTE_PARALLEL goes at the end of a FOR_EACH line, not as its own step"))
+    elif word in ACTION_KEYWORDS:
         s.issues.append(Issue(no, "E_ACTION_SYNTAX", f"malformed {word} statement: {stmt!r}"))
     elif word in BLOCK_KINDS:
         s.issues.append(Issue(no, "E_CONDITION_SYNTAX", f"malformed {word} condition: {stmt!r}"))
     else:
         s.issues.append(Issue(no, "E_UNKNOWN_STEP", f"unknown step keyword: {stmt!r}"))
-    return None
 
 
 def _parse_resource(node: _Line, s: Script) -> Resource:

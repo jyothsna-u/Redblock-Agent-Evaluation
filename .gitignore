@@ -16,8 +16,19 @@ dist/
 .coverage
 htmlcov/
 
-# Run artefacts, SQLite DB, LLM mapping cache
+# Outputs: run artefacts, history, SQLite DB, LLM mapping cache.
+# Default dir is results/; the file names catch a custom --results dir too.
 results/
+history/
+cache/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+mapping.json
+score_*.json
+run_*.json
+summary.json
 
 # Inputs (redflows, text, videos/PDF assets) stay local
 *.redflow
