@@ -1,0 +1,9 @@
+URL "https://x.example.com"
+STEPS
+    - IF $roles NOT_EMPTY
+        - FOR_EACH $role IN $roles
+            - CLICK ON "$role option" INTENT "Select the role $role"
+    - IF $roles EMPTY
+        - CLICK ON "Skip button" INTENT "Skip role assignment"
+
+$roles = ["Admin", "Viewer"]

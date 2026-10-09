@@ -1,0 +1,6 @@
+URL "https://x.example.com"
+STEPS
+    - BROWSER_FIND $employee_id
+    - CLICK ON "The row for $employee_id" INTENT "Open the employee $employee_id"
+
+$employee_id = "E-1042"

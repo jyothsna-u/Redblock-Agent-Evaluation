@@ -1,0 +1,17 @@
+URL "https://admin.example.com/users/export"
+
+STEPS
+    - CLICK ON "Export Users button" INTENT "Start the export job"
+
+    # A confirmation dialog appears only for large exports
+    - WHEN "a dialog asking to confirm the export is shown"
+        - CLICK ON "Confirm export button" INTENT "Confirm the large export"
+
+    # The latest row shows a Refresh control while the job is still processing
+    - UNTIL "the Refresh icon is still visible in the latest export row"
+        - CLICK ON "Refresh icon in the latest export row" INTENT "Refresh the export status"
+
+    # Make sure the file is actually marked ready before downloading
+    - WAIT_UNTIL "the latest export row shows a Download link"
+
+    - CLICK ON "Download link in the latest export row" INTENT "Download the exported file"

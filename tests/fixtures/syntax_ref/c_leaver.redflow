@@ -1,0 +1,20 @@
+URL "https://admin.google.com/ac/users"
+
+STEPS
+    - FILL_AND_ENTER $leaver_email INTO "Top Search Bar" INTENT "Locate the account for $leaver_email"
+    - CLICK ON "User Profile Row" INTENT "Open the user profile"
+    - CLICK ON "Security Settings" INTENT "Access security options"
+    - CLICK ON "Suspend User" INTENT "Suspend the account"
+
+    # Transfer data if a recipient is defined
+    - IF $transfer_data_to EXISTS
+        - CLICK ON "Transfer Data Checkbox" INTENT "Initiate data transfer"
+        - FILL_AND_ENTER $transfer_data_to INTO "Recipient Input" INTENT "Transfer Drive files to $transfer_data_to"
+        - CLICK ON "Transfer Button" INTENT "Confirm transfer to $transfer_data_to"
+    - ELSE
+        - CLICK ON "Delete Data Button" INTENT "Delete data as no recipient was provided"
+
+    - CLICK ON "Confirm Suspension" INTENT "Finalize suspension"
+
+$leaver_email = "charlie.doe@acme.com"
+$transfer_data_to? = "manager.dave@acme.com"

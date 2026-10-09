@@ -1,0 +1,10 @@
+URL "https://x.example.com"
+STEPS
+    - FOR_EACH $account, $permissions IN $access
+        - FOR_EACH $permission IN $permissions
+            - CLICK ON "the checkbox in the $permission row under the $account column" INTENT "Grant $permission on $account"
+
+$access["Reserve"] = ["Request payments", "Send money"]
+$access[Operating] = ["Send money"]
+$access["Petty cash"] = "View bank accounts"
+$access["Archive"] = []

@@ -1,0 +1,14 @@
+URL CONTINUE_FROM_LOGIN
+
+STEPS
+    - CLICK ON "Admin tab in the top navigation" INTENT "Open the admin area"
+    - CLICK ON "Search button" INTENT "Run the search"
+    - WAIT 30
+    - GOTO "https://github.com/$org/$repo/settings"
+    - DOUBLE_CLICK ON "The first user row" INTENT "Open the user"
+    - RIGHT_CLICK ON "The user avatar" INTENT "Open the context menu"
+    - UPLOAD $file INTO "Profile picture upload area" INTENT "Upload the profile picture $file"
+
+$org = "redblock"
+$repo = "agents"
+$file = "vault://avatars/alice.png"

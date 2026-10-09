@@ -1,0 +1,9 @@
+URL "https://admin.example.com/users"
+RESOURCE: "Users" IDENTIFIED_BY "email"
+EXTRACT
+    FROM LIST
+        - "email" INSTRUCT "in Email column"
+        - "first_name" INSTRUCT "in First Name column"
+        - "last_name" INSTRUCT "in Last Name column"
+        - "role" INSTRUCT "in Role column" POSSIBLE_VALUES ["Admin", "Editor", "Viewer"]
+        - "account_status" INSTRUCT "status badge in Status column" POSSIBLE_VALUES ["Active", "Inactive", "Pending"]

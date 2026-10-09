@@ -7,7 +7,7 @@ from redscore.checks import check_blocks, out_of_sequence, pair_variables
 from redscore.mapping import Mapping, MappingError, Pair, fixture_mapper, validate_mapping
 from redscore.parser import parse
 from redscore.rules import load_rules
-from redscore.scorer import InvalidGroundTruth, load_gt, score_run, task_score
+from redscore.scorer import gt_issues, load_gt, score_run, task_score
 
 ROOT = Path(__file__).resolve().parent.parent
 TASK = ROOT / "tasks" / "venus-jml-create-account"
@@ -87,15 +87,88 @@ def test_sequence_in_order_and_empty():
 
 # ---------------------------------------------------------------- syntax gate + validation of inputs
 
-def test_syntax_error_scores_zero():
-    gt = load_gt((TASK / "gt.redflow").read_text())
-    r = score_run(gt, 'STEPS\n    - CLICK ON "Invite"\n', RULES, lambda *_: pytest.fail("mapper called"))
-    assert r["final"] == 0 and not r["syntax"]["ok"] and r["mapping"] is None
+def test_syntax_error_gives_final_zero_but_keeps_the_step_scores():
+    # Real case (tc11 run 2): a good flow whose only error is an undefined variable in one INTENT.
+    gt = 'STEPS\n    - CLICK ON "Archive checkbox" INTENT "archive"\n    - CLICK ON "Submit" INTENT "save"\n'
+    gen = ('STEPS\n    - CLICK ON "Archive checkbox" INTENT "Toggle to $toggle"\n'
+           '    - CLICK ON "Submit" INTENT "save"\n')
+    r = _score(gt, gen, [(1, 1), (2, 2)])
+    assert not r["syntax"]["ok"] and r["final"] == 0 and r["passed"] is False
+    assert r["final_if_runnable"] == 100.0 and r["base"] == 100.0 and r["mapping"] is not None
 
 
-def test_invalid_gt_rejected():
-    with pytest.raises(InvalidGroundTruth):
-        load_gt('STEPS\n    - CLICK ON "A"\n')
+def test_a_typo_in_a_gen_step_costs_that_step_not_the_whole_step():
+    gt = 'STEPS\n    - CLICK ON "Save button" INTENT "Save"\n'
+    gen = 'STEPS\n    - CLIK ON "Save button" INTENT "Save"\n'
+    r = _score(gt, gen, [(1, 1)])
+    assert r["final"] == 0 and r["steps"][0]["keyword"] == 0.0 and r["steps"][0]["element"] == 0.4
+    assert r["final_if_runnable"] == 70.0
+
+
+def test_explanation_of_a_syntax_failed_run_adds_up_to_zero():
+    from redscore.history import explain
+    gt_src = 'STEPS\n    - CLICK ON "Save button" INTENT "Save"\n    - CLICK ON "OK" INTENT "confirm"\n'
+    gen = 'STEPS\n    - CLIK ON "Save button" INTENT "Save"\n    - CLICK ON "OK" INTENT "confirm"\n'
+    r = _score(gt_src, gen, [(1, 1), (2, 2)])
+    e = explain(load_gt(gt_src), gen, r, RULES)
+    assert [c["what"] for c in e["cuts"]] == ["GT1 keyword", "syntax gate"]
+    assert e["cuts"][1]["points"] == 85.0 and "E_UNKNOWN_STEP" in e["cuts"][1]["why"]
+    assert abs(100 - sum(c["points"] for c in e["cuts"]) - r["final"]) < 0.01
+    assert e["final_if_runnable"] == 85.0 and "would be 85.0 if it ran" in e["summary"]
+
+
+def test_syntax_failed_run_whose_mapping_fails_still_scores_zero():
+    def broken(gt, gen):
+        raise RuntimeError("LLM down")
+    gt = load_gt('STEPS\n    - CLICK ON "A" INTENT "a"\n')
+    r = score_run(gt, 'STEPS\n    - CLICK ON "Invite"\n', RULES, broken)
+    assert r["final"] == 0 and r["final_if_runnable"] is None and "LLM down" in r["diagnostics_error"]
+    with pytest.raises(RuntimeError):      # a valid GEN whose mapping fails is "not scored", never a 0
+        score_run(gt, 'STEPS\n    - CLICK ON "A" INTENT "a"\n', RULES, broken)
+
+
+# ---------------------------------------------------------------- invalid GT: flagged with its step, scoring goes on
+
+def test_invalid_gt_is_flagged_not_rejected():
+    gt = load_gt('STEPS\n    - CLICK ON "A"\n    - CLICK ON "B" INTENT "b"\n')
+    (issue,) = gt_issues(gt)
+    assert (issue["step"], issue["line"], issue["code"]) == ("GT1", 2, "E_NO_INTENT")
+    r = _score('STEPS\n    - CLICK ON "A"\n    - CLICK ON "B" INTENT "b"\n',
+               'STEPS\n    - CLICK ON "A" INTENT "a"\n    - CLICK ON "B" INTENT "b"\n', [(1, 1), (2, 2)])
+    assert r["gt_valid"] is False and r["final"] == 100.0
+
+
+def test_unparseable_gt_step_is_kept_so_the_gen_is_still_scored_against_it():
+    # Real case (tc12): `NEAR` is not redflow. The GT step is kept from its keyword, element, variable and intent.
+    gt_src = ('STEPS\n    - CLICK ON "Users tab" INTENT "open users"\n'
+              '    - CLICK ON "Checkbox" NEAR $user_email INTENT "To select $user_email"\n'
+              '    - CLICK ON "Reactivate" INTENT "reactivate"\n$user_email = "a@b.com"\n')
+    gen = ('STEPS\n    - CLICK ON "Users tab" INTENT "open users"\n'
+           '    - CLICK ON "Checkbox in the row for $email" INTENT "Select $email"\n'
+           '    - CLICK ON "Reactivate" INTENT "reactivate"\n$email = "a@b.com"\n')
+    gt = load_gt(gt_src)
+    assert [a.keyword for a in gt.actions] == ["CLICK", "CLICK", "CLICK"] and gt.action(2).malformed
+    assert gt.action(2).action_vars() == ["user_email"]
+    assert [(i["step"], i["code"]) for i in gt_issues(gt)] == [("GT2", "E_ACTION_SYNTAX")]
+    r = _score(gt_src, gen, [(1, 1), (2, 2), (3, 3)])
+    assert r["final"] == 100.0 and r["gt_valid"] is False
+
+
+def test_malformed_gt_block_is_not_charged_to_the_gen():
+    gt_src = 'STEPS\n    - IF $x == "a"\n        - CLICK ON "A" INTENT "a"\n$x = "a"\n'
+    gen = 'STEPS\n    - CLICK ON "A" INTENT "a"\n$x = "a"\n'
+    r = _score(gt_src, gen, [(1, 1)])
+    assert r["blocks"][0]["ok"] and "GT flagged" in r["blocks"][0]["reason"]
+    assert [(i["step"], i["code"]) for i in r["gt_issues"]] == [("B1", "E_OPERATOR_SYMBOL")]
+    assert r["final"] == 100.0
+
+
+def test_unused_gt_variable_is_flagged_not_charged():
+    # Real case (tc2): `$app_name` is defined but no GT step uses it.
+    gt_src = 'STEPS\n    - CLICK ON "Save" INTENT "save"\n$app_name = "Jira"\n'
+    r = _score(gt_src, 'STEPS\n    - CLICK ON "Save" INTENT "save"\n', [(1, 1)])
+    assert r["variables"]["missing"] == [] and r["final"] == 100.0
+    assert [i["code"] for i in r["gt_issues"]] == ["W_VAR_UNUSED"] and r["gt_valid"] is True
 
 
 def test_mapping_validation():
@@ -138,6 +211,60 @@ def test_hard_coded_fill_loses_variable_points():
     assert r["steps"][0]["variables"] == 0.0
     assert r["variables"]["missing"] == ["name"]
     assert r["final"] == pytest.approx(80 - 5)
+
+
+def _score(gt_src, gen_src, pairs):
+    m = Mapping([Pair(g, n, True, True) for g, n in pairs], [], [], [])
+    return score_run(load_gt(gt_src), gen_src, RULES, lambda a, b: m)
+
+
+def test_mistranscribed_value_costs_only_the_missing_variable_penalty():
+    # Real case (tc5 run 1): the loop and steps are right, the sample values were misread from the video.
+    gt = ('STEPS\n    - FILL $email_id INTO "email field" INTENT "type $email_id"\n'
+          '    - IF $roles NOT_EMPTY\n        - FOR_EACH $role_name IN $roles\n'
+          '            - SELECT $role_name FROM "open list" INTENT "select $role_name"\n'
+          '$email_id = "hailey.roach.03b2@redblock.ai"\n$roles = ["firefly-red - Org Admins", "firefly-red - Viewer"]\n')
+    gen = ('STEPS\n    - FILL $invited_user_email INTO "email field" INTENT "type $invited_user_email"\n'
+           '    - IF $assigned_roles NOT_EMPTY\n        - FOR_EACH $role IN $assigned_roles\n'
+           '            - SELECT $role FROM "open list" INTENT "select $role"\n'
+           '$invited_user_email = "haleyroach.0302@redblock.ai"\n$assigned_roles = ["fy-red - Org Admins", "fy-red - Viewer"]\n')
+    r = _score(gt, gen, [(1, 1), (2, 2)])
+    assert r["variables"]["missing"] == ["email_id", "roles"]
+    assert r["variables"]["mismatched"] == {"email_id": "invited_user_email", "roles": "assigned_roles"}
+    assert [s["variables"] for s in r["steps"]] == [0.2, 0.2]
+    assert all(b["ok"] for b in r["blocks"])
+    assert {k: v["points"] for k, v in r["penalties"].items()}["missing_variable"] == 10
+    assert r["final"] == 90.0
+
+
+def test_value_pairing_wins_over_step_pairing():
+    gt = 'STEPS\n    - FILL $a INTO "A" INTENT "type $a"\n$a = "x"\n'
+    gen = 'STEPS\n    - FILL $b INTO "A" INTENT "type $b"\n$b = "x"\n$c = "y"\n'
+    r = _score(gt, gen, [(1, 1)])
+    assert r["variables"]["pairs"] == {"a": "b"} and r["variables"]["missing"] == [] and r["final"] == 100.0
+
+
+def test_hard_coded_value_is_still_caught():
+    gt = 'STEPS\n    - CLICK ON "Radio Button for $role" INTENT "Pick $role"\n$role = "Admin"\n'
+    gen = 'STEPS\n    - CLICK ON "Admin radio button" INTENT "Pick the admin role"\n'
+    r = _score(gt, gen, [(1, 1)])
+    assert r["steps"][0]["variables"] == 0.0 and 'hard-coded "Admin"' in r["steps"][0]["variables_reason"]
+    assert r["variables"]["missing"] == ["role"] and r["variables"]["mismatched"] == {}
+
+
+def test_value_word_in_element_of_parametrised_step_is_not_hard_coded():
+    gt = 'STEPS\n    - CLICK ON "Radio Button for $role" INTENT "Pick $role"\n$role = "User"\n'
+    gen = 'STEPS\n    - CLICK ON "$role radio button in the Invite user dialog" INTENT "Pick $role"\n$role = "User"\n'
+    r = _score(gt, gen, [(1, 1)])
+    assert r["steps"][0]["variables"] == 0.2 and r["final"] == 100.0
+
+
+def test_exact_pass_mark_passes():
+    # 9 steps each losing only the intent: 8.1 / 9 * 100 must be exactly 90, which passes.
+    steps = "".join(f'    - CLICK ON "B{i}" INTENT "a"\n' for i in range(9))
+    m = Mapping([Pair(i, i, True, False) for i in range(1, 10)], [], [], [])
+    r = score_run(load_gt("STEPS\n" + steps), "STEPS\n" + steps, RULES, lambda a, b: m)
+    assert r["final"] == 90.0 and r["passed"] is True
 
 
 def test_for_each_loop_variables_pair_through_list():

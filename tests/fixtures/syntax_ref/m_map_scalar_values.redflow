@@ -1,0 +1,7 @@
+URL "https://x.example.com"
+STEPS
+    - FOR_EACH $email, $role IN $role_of
+        - SELECT $role FROM "the role dropdown in the row for $email" INTENT "Set $email to $role"
+
+$role_of["john@acme.com"] = "Admin"
+$role_of["mary@acme.com"] = "Viewer"

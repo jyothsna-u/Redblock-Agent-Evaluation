@@ -1,0 +1,13 @@
+URL "https://x.example.com"
+STEPS
+    - IF $department EQUALS "Sales"
+        - SELECT $sales_role FROM "Role dropdown" INTENT "Assign the $sales_role role for $department"
+    - ELIF $department EQUALS "Support"
+        - SELECT $support_role FROM "Role dropdown" INTENT "Assign the $support_role role for $department"
+    - ELSE
+        - SELECT $default_role FROM "Role dropdown" INTENT "Assign the default role $default_role"
+
+$department = "Support"
+$sales_role = "Sales Rep"
+$support_role = "Support Agent"
+$default_role = "Standard User"

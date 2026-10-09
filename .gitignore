@@ -7,6 +7,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-*/
 *.egg-info/
 build/
 dist/
@@ -37,6 +38,11 @@ summary.json
 *.mov
 *.webm
 tasks/**/*.pdf
+# ...except what tests and CI need: the syntax fixtures and the golden Venus task (its GT and runs are
+# published in docs/redscore-spec.md anyway), and the pinned requirements.
+!tests/fixtures/**/*.redflow
+!tasks/venus-jml-create-account/**/*.redflow
+!requirements*.txt
 
 # claude.ai export: keep only the extracted transcripts and generated code.
 # The raw export holds unrelated personal chats, account metadata and ~24MB of artifact bundles.

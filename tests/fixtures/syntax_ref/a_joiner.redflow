@@ -1,0 +1,23 @@
+URL "https://acme-corp.lightning.force.com/lightning/setup/ManageUsers/home"
+
+STEPS
+    # Start the creation flow
+    - CLICK ON "New User Button" INTENT "Start the user creation process"
+    - FILL $first_name INTO "First Name Input" INTENT "Enter the user's $first_name"
+    - FILL $last_name INTO "Last Name Input" INTENT "Enter the user's $last_name"
+    - FILL $user_email INTO "Email Input" INTENT "Set the primary email to $user_email"
+
+    # Conditional logic based on department
+    - IF $department EQUALS "Sales"
+        - SELECT $role FROM "Role Dropdown" INTENT "Assign the Sales $role to the user"
+        - CLICK ON "Salesforce License Checkbox" INTENT "Assign standard license"
+    - ELSE
+        - CLICK ON "Standard Platform License Checkbox" INTENT "Assign platform license"
+
+    - CLICK ON "Save Button" INTENT "Save the new user record"
+
+$first_name = "Alice"
+$last_name = "Smith"
+$user_email = "alice.smith@acme.com"
+$department = "Sales"
+$role = "Regional Sales Manager"

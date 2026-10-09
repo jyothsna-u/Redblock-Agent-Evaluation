@@ -1,0 +1,13 @@
+URL "https://admin.atlassian.com/groups"
+RESOURCE: "Groups" IDENTIFIED_BY "Group_name"
+EXTRACT
+    FROM LIST
+        - "Group_name" INSTRUCT "Column 1"
+        - "Members" INSTRUCT "Column 2"
+        STEPS
+            - CLICK ON "Group_name" INTENT "Drill down into this specific group"
+        RESOURCE "group_users"
+        EXTRACT
+            FROM LIST
+                - "user_email" INSTRUCT "Found in the email column"
+                - "user_status" INSTRUCT "Found in status column"

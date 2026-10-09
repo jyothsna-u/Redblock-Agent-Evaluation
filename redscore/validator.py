@@ -52,7 +52,7 @@ def _check_variables(s: Script) -> List[Issue]:
         used.update(a.all_vars())
     for b in s.blocks:
         used.update(x for x in (b.var, b.rhs_var, b.list_var) if x)
-        used.update(vars_in(b.condition))
+        used.update(vars_in(b.condition) + vars_in(b.text if b.malformed else ""))
     for name in sorted(set(s.variables) - used):
         out.append(Issue(s.variables[name].line, "W_VAR_UNUSED", f"${name} is defined but never used", "warning"))
     return out
@@ -148,6 +148,8 @@ def _check_block(b: Block, s: Script, out: List[Issue], use, new_name, kind_of, 
             out.append(Issue(b.line, "E_WAIT_UNTIL_BODY", "WAIT_UNTIL must not have a nested body"))
     elif not b.then:
         out.append(Issue(b.line, "E_EMPTY_BODY", f"{'ELIF' if b.is_elif else b.kind} must have at least one nested step"))
+    if b.malformed:      # GT lenient parse: the header error is already reported; only the body is checked
+        return
     if b.kind in ("WHEN", "UNTIL", "WAIT_UNTIL"):
         if not (b.condition or "").strip():
             out.append(Issue(b.line, "E_EMPTY_CONDITION", f"{b.kind} needs a non-empty quoted condition"))

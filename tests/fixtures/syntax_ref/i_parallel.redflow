@@ -1,0 +1,6 @@
+URL "https://x.example.com"
+STEPS
+    - FOR_EACH $role IN $roles EXECUTE_PARALLEL
+        - CLICK ON "The $role checkbox in the Roles section" INTENT "Assign the role $role"
+
+$roles = ["Admin", "Viewer"]

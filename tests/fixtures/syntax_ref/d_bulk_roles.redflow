@@ -1,0 +1,15 @@
+URL "https://sap-cloud.app"
+
+STEPS
+    - CLICK ON "The ADMINISTRATION tab in top nav bar" INTENT "To navigate to the user management section"
+    - CLICK ON "The $email in the user list" INTENT "To locate the user $email"
+
+    # Loop through each role in the list
+    - FOR_EACH $role IN $roles
+        - CLICK ON "The $role checkbox in the Roles section of the User Profile" INTENT "To assign the $role to the user $email"
+
+    - CLICK ON "The Save button at the bottom of the User Profile" INTENT "To save the updated user details with the assigned roles"
+    - CLICK ON "OK button in the confirmation dialog" INTENT "To confirm and finalize the role assignment for the user"
+
+$email = "test@company.com"
+$roles = ["Production Operator", "Developer"]

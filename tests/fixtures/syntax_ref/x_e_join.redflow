@@ -1,0 +1,18 @@
+URL "https://payroll.internal.com/employees"
+RESOURCE: "Staff" IDENTIFIED_BY "employee_id"
+EXTRACT
+    FROM LIST
+        - "name" INSTRUCT "Name in the first column"
+        STEPS
+            - CLICK ON "name" INTENT "Open employee profile"
+        EXTRACT
+            FROM DETAILS
+                - "employee_id" INSTRUCT "Labeled ID in the summary header"
+
+STEPS
+    - GOTO "https://it-assets.internal.com/devices"
+RESOURCE: "Assets" JOIN ON "employee_id"
+EXTRACT
+    FROM LIST
+        - "serial_number" INSTRUCT "Serial in the first column"
+        - "employee_id" INSTRUCT "Employee id in column with header Employee ID"

@@ -1,0 +1,19 @@
+# Venus-JML Create Account: the worked example in docs/redscore-spec.md.
+# gen/ holds the spec's illustrative GEN runs (written to trigger each penalty),
+# not real generator output.
+STEPS
+    - CLICK ON "Invite Button" INTENT "To start with the process of inviting the user"
+    - FILL $legal_first_name INTO "Legal first name box" INTENT "To fill $legal_first_name in the legal first name box"
+    - FILL $legal_last_name INTO "Legal last name box" INTENT "To fill $legal_last_name in the legal last name box"
+    - FILL $email INTO "Email box" INTENT "To fill $email in the email box"
+    - CLICK ON "Next Button on the bottom right" INTENT "To go to next page of inviting user process"
+    - CLICK ON "Radio Button for $role" INTENT "To select $role for the newly added user"
+    - CLICK ON "Next Button on the bottom right" INTENT "To complete role selection process and proceed"
+    - IF $role EQUALS "Custom"
+        - CLICK ON "Next Button" INTENT "To finish custom options selection part and proceed with inviting user"
+    - CLICK ON "Invite Button" INTENT "To submit the details and complete the process of inviting the user"  # critical
+
+$email = "john1@redblockdemo.com"
+$legal_first_name = "john"
+$legal_last_name = "smith"
+$role = "Admin"

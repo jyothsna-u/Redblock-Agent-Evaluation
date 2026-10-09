@@ -88,13 +88,15 @@ class Action:
     grab_list: bool = False               # GRAB ALL ... INTO $x[]
     possible_values: Optional[List[str]] = None   # GRAB ... POSSIBLE_VALUES [...]
     seconds: Optional[int] = None         # WAIT <seconds>
+    malformed: bool = False               # GT only (lenient parse): a step line that is not valid redflow
+    loose_vars: List[str] = field(default_factory=list)   # malformed step: $vars outside quotes and INTENT
 
     def action_vars(self) -> List[str]:
         """Variables used by the action itself (value + element), excluding the intent.
 
         A GRAB target is defined by the step, not used by it, so it is not included."""
         out = [self.value_var] if self.value_var else []
-        out += [v for v in vars_in(self.element) if v not in out]
+        out += [v for v in self.loose_vars + vars_in(self.element) if v not in out]
         return out
 
     def all_vars(self) -> List[str]:
@@ -125,8 +127,11 @@ class Block:
     else_line: Optional[int] = None
     id: str = ""
     path: Tuple[Tuple[str, str], ...] = ()
+    malformed: bool = False         # GT only (lenient parse): a block header that is not valid redflow
 
     def condition_text(self) -> str:
+        if self.malformed:
+            return self.text
         if self.kind == "IF":
             rhs = f' "{self.literal}"' if self.literal is not None else f" ${self.rhs_var}" if self.rhs_var else ""
             return f"{'ELIF' if self.is_elif else 'IF'} ${self.var} {self.op}{rhs}"
@@ -203,6 +208,7 @@ class Script:
     issues: List[Issue] = field(default_factory=list)
     duplicate_vars: List[Variable] = field(default_factory=list)
     map_optional: Dict[str, Set[bool]] = field(default_factory=dict)   # map name -> `?` flags seen
+    lenient: bool = False     # GT mode: invalid step lines are kept as malformed steps/blocks (and still reported)
 
     @property
     def is_extraction(self) -> bool:
@@ -271,8 +277,14 @@ def _line_tree(source: str, issues: List[Issue]) -> _Line:
 
 # ---------------------------------------------------------------- parser
 
-def parse(source: str) -> Script:
-    script = Script(source=source)
+def parse(source: str, lenient: bool = False) -> Script:
+    """Parse a redflow. Problems are recorded as issues, never raised.
+
+    lenient=True is for ground truths: a step line that is not valid redflow is still kept (as a malformed
+    step or block, built from its keyword, quoted element, INTENT and variables) so a GEN can be scored
+    against the GT the author meant, while the error is still reported. GENs are parsed strictly.
+    """
+    script = Script(source=source, lenient=lenient)
     root = _line_tree(source, script.issues)
     for node in root.children:
         _parse_top(node, script)
@@ -424,8 +436,9 @@ def _parse_steps(lines: List[_Line], s: Script) -> List[Node]:
         t = node.text
         if not t.startswith("-"):
             s.issues.append(Issue(node.no, "E_STEP_DASH", f"step must start with '- ': {t!r}"))
-            continue
-        stmt = t[1:].strip()
+            if not s.lenient:
+                continue
+        stmt = t[1:].strip() if t.startswith("-") else t
         word = stmt.split()[0] if stmt.split() else ""
         if word in ("ELSE", "ELIF"):
             _parse_else(node, stmt, word, out, s)
@@ -436,11 +449,30 @@ def _parse_steps(lines: List[_Line], s: Script) -> List[Node]:
             out.append(block)
             continue
         action = _parse_action(stmt, node.no, s)
-        if action is not None:
+        if action is None and s.lenient:
+            out.append(_malformed(node, stmt, s))
+        elif action is not None:
             action.critical = bool(CRITICAL_RE.match(node.comment))
             out.append(action)
             _no_children(node, s)
     return out
+
+
+def _malformed(node: _Line, stmt: str, s: Script) -> Node:
+    """GT lenient mode: keep an invalid step line (already reported as an issue) as the step its author meant."""
+    word = stmt.split()[0] if stmt.split() else "?"
+    if word in BLOCK_KINDS:
+        b = Block("IF" if word in ("IF", "ELIF") else word, node.no, stmt, malformed=True, is_elif=word == "ELIF")
+        b.then = _parse_steps(node.children, s)
+        return b
+    m = re.search(r'\sINTENT\s+' + _Q, stmt)
+    head = stmt[:m.start()] if m else stmt
+    q = re.search(_Q, head)
+    a = Action(word, node.no, stmt, element=q.group(1) if q else None, intent=m.group(1) if m else None,
+               malformed=True, loose_vars=vars_in(re.sub(_Q, "", head)))
+    a.critical = bool(CRITICAL_RE.match(node.comment))
+    _no_children(node, s)
+    return a
 
 
 def _chain_tail(prev: Optional[Node]) -> Optional[Block]:
@@ -454,12 +486,19 @@ def _chain_tail(prev: Optional[Node]) -> Optional[Block]:
 def _parse_else(node: _Line, stmt: str, word: str, out: List[Node], s: Script) -> None:
     tail = _chain_tail(out[-1] if out else None)
     open_tail = tail is not None and tail.else_ is None
+
+    def orphan(code: str, message: str) -> None:
+        s.issues.append(Issue(node.no, code, message))
+        if s.lenient:      # GT: keep the branch's steps (in the enclosing block) so they can still be matched
+            out.extend(_parse_steps(node.children, s))
+
     if word == "ELSE":
         if stmt != "ELSE":
             s.issues.append(Issue(node.no, "E_ELSE_SYNTAX", "ELSE takes no condition"))
-            return
+            if not s.lenient:
+                return
         if not (open_tail and tail.kind in ("IF", "WHEN")):
-            s.issues.append(Issue(node.no, "E_ELSE_ORPHAN", "ELSE must directly follow an IF, ELIF or WHEN block"))
+            orphan("E_ELSE_ORPHAN", "ELSE must directly follow an IF, ELIF or WHEN block")
             return
         tail.else_ = _parse_steps(node.children, s)
         tail.else_line = node.no
@@ -467,15 +506,17 @@ def _parse_else(node: _Line, stmt: str, word: str, out: List[Node], s: Script) -
             s.issues.append(Issue(node.no, "E_EMPTY_BODY", "ELSE must have at least one nested step"))
         return
     if open_tail and tail.kind == "WHEN":
-        s.issues.append(Issue(node.no, "E_ELIF_AFTER_WHEN", "WHEN supports ELSE but not ELIF"))
+        orphan("E_ELIF_AFTER_WHEN", "WHEN supports ELSE but not ELIF")
         return
     if not (open_tail and tail.kind == "IF"):
-        s.issues.append(Issue(node.no, "E_ELIF_ORPHAN", "ELIF must directly follow an IF or another ELIF"))
+        orphan("E_ELIF_ORPHAN", "ELIF must directly follow an IF or another ELIF")
         return
     block = _parse_block_header("IF" + stmt[len("ELIF"):], node.no)
     if block is None or block.kind != "IF":
         _step_error(stmt, node.no, s)
-        return
+        if not s.lenient:
+            return
+        block = Block("IF", node.no, stmt, malformed=True)
     block.text, block.is_elif = stmt, True
     block.then = _parse_steps(node.children, s)
     tail.else_ = [block]

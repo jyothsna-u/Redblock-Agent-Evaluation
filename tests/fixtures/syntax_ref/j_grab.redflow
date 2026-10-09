@@ -1,0 +1,10 @@
+URL "https://x.example.com"
+STEPS
+    - GRAB "the confirmation keyword shown in the delete dialog" INTO $confirm_kw INTENT "Read the word needed to confirm deletion"
+    - FILL $confirm_kw INTO "Confirmation input" INTENT "Type the confirmation keyword $confirm_kw"
+    - GRAB "the user's current status" INTO $status INTENT "Read the current status" POSSIBLE_VALUES ["Active", "Suspended"]
+    - IF $status EQUALS "Suspended"
+        - CLICK ON "Reactivate button" INTENT "Reactivate the account"
+    - GRAB ALL "ticked subscriptions other than Forgot Password" INTO $subs[] INTENT "List the active subscriptions"
+    - FOR_EACH $sub IN $subs
+        - CLICK ON "$sub" INTENT "Expand the subscription $sub"

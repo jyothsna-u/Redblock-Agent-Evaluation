@@ -1,0 +1,8 @@
+URL "http://synqa.rjf.com:8888/syn/#simpleBrowser/type=SynGroup/seq=2097258837-3"
+STEPS
+    - CLICK ON "Search button in top right corner" INTENT "Load all groups into the table"
+RESOURCE: "Groups" IDENTIFIED_BY "unique_id"
+EXTRACT
+    FROM LIST
+        - "unique_id" INSTRUCT "in Unique ID column"
+        - "description" INSTRUCT "in Description column"

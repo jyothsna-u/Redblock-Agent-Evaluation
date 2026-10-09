@@ -1,0 +1,13 @@
+STEPS
+    - CLICK ON "Invite user button" INTENT "Open the invite user form"
+    - FILL $first_name INTO "Legal first name field" INTENT "Enter the legal first name $first_name"
+    - FILL $last_name INTO "Legal last name field" INTENT "Enter the legal last name $last_name"
+    - FILL $user_email INTO "Email field" INTENT "Enter the email $user_email"
+    - CLICK ON "Next button at the bottom right" INTENT "Go to the role selection page"
+    - CLICK ON "Radio button for $role" INTENT "Select the role $role"
+    - CLICK ON "Next button at the bottom right" INTENT "Confirm the role and continue"
+
+$user_email = "john1@redblockdemo.com"
+$first_name = "john"
+$last_name = "smith"
+$role = "Admin"

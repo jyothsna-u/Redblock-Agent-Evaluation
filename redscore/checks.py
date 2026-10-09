@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from .mapping import Mapping
-from .parser import RUNTIME_KINDS, Action, Block, Script
+from .parser import RUNTIME_KINDS, Action, Block, Script, vars_in
 
 
 # ---------------------------------------------------------------- variables
@@ -15,15 +15,20 @@ from .parser import RUNTIME_KINDS, Action, Block, Script
 @dataclass
 class VariableResult:
     pairs: Dict[str, str]          # GT name -> GEN name (defined vars, GRAB targets, FOR_EACH loop vars)
-    missing: List[str]             # GT defined vars with no GEN partner (GRAB targets and loop vars excluded)
+    missing: List[str]             # GT defined vars with no GEN partner of the same value (GRAB/loop vars excluded)
     unpaired_gen: List[str]        # GEN defined vars with no GT partner (informational)
+    mismatched: Dict[str, str] = field(default_factory=dict)   # missing GT var -> GEN var paired through steps
 
 
 def pair_variables(gt: Script, gen: Script, mapping: Mapping) -> VariableResult:
-    """Pair GEN and GT variables by identical default value.
+    """Pair GEN and GT variables by identical default value, then through the steps that use them.
 
-    Ties (several variables with the same value) are broken by how often the two
-    variables appear together in mapped step pairs, then by name similarity.
+    Value pairing: ties (several variables with the same value) are broken by how often the two
+    variables appear together in mapped step pairs, then by name similarity. A GT variable without a
+    same-value partner is a missing variable (-5).
+    Step pairing (decision 2026-10-06): a variable whose sample value was transcribed differently is still
+    paired through the mapped steps and loops that use it, so it costs only the missing-variable penalty
+    and does not also fail every step and logic block that uses it. It is reported in `mismatched`.
     """
     cooccur: Dict[Tuple[str, str], int] = {}
     for p in mapping.pairs:
@@ -46,31 +51,73 @@ def pair_variables(gt: Script, gen: Script, mapping: Mapping) -> VariableResult:
             pairs[g] = n
             taken.add(n)
 
+    same_value = set(pairs)
+
     # GRAB targets have no default value; they pair through their mapped GRAB steps.
-    for p in sorted(mapping.pairs, key=lambda p: p.gt):
+    ordered = sorted(mapping.pairs, key=lambda p: p.gt)
+    for p in ordered:
         g, n = gt.action(p.gt).grab_var, gen.action(p.gen).grab_var
         if g and n and g not in pairs and n not in taken:
             pairs[g] = n
             taken.add(n)
 
-    # FOR_EACH loop variables (and a map loop's $key) pair through their paired list / map variables.
-    # Document order, so an outer map loop's $value is paired before a nested loop over it.
-    for gb in gt.blocks:
-        if gb.kind != "FOR_EACH" or gb.list_var not in pairs:
-            continue
-        for nb in gen.blocks:
-            if (nb.kind == "FOR_EACH" and nb.list_var == pairs[gb.list_var] and bool(nb.key_var) == bool(gb.key_var)
-                    and gb.item_var not in pairs and nb.item_var not in taken):
-                pairs[gb.item_var] = nb.item_var
-                taken.add(nb.item_var)
-                if gb.key_var and gb.key_var not in pairs and nb.key_var not in taken:
-                    pairs[gb.key_var] = nb.key_var
-                    taken.add(nb.key_var)
-                break
+    def link(g: str, n: str) -> bool:
+        if g in pairs or n in taken or not _same_kind(gt, g, gen, n):
+            return False
+        pairs[g] = n
+        taken.add(n)
+        return True
 
-    missing = [g for g in gt.variables if g not in pairs]
+    gen_loops = [nb for nb in gen.blocks if nb.kind == "FOR_EACH"]
+    changed = True
+    while changed:
+        changed = False
+        # FOR_EACH loop variables (and a map loop's $key) pair through their paired list / map variables.
+        # Document order, so an outer map loop's $value is paired before a nested loop over it.
+        for gb in (b for b in gt.blocks if b.kind == "FOR_EACH"):
+            if gb.list_var in pairs and gb.item_var not in pairs:
+                for nb in gen_loops:
+                    if nb.list_var == pairs[gb.list_var] and bool(nb.key_var) == bool(gb.key_var) and link(gb.item_var, nb.item_var):
+                        if gb.key_var:
+                            link(gb.key_var, nb.key_var)
+                        changed = True
+                        break
+            # ...and the other way round: loops whose items pair have paired lists.
+            if gb.item_var in pairs and gb.list_var not in pairs:
+                for nb in gen_loops:
+                    if nb.item_var == pairs[gb.item_var] and link(gb.list_var, nb.list_var):
+                        changed = True
+                        break
+        # A mapped step pair whose only unpaired variables are one on each side pairs them.
+        for p in ordered:
+            g_free = [v for v in gt.action(p.gt).action_vars() if v not in pairs]
+            n_free = [v for v in gen.action(p.gen).action_vars() if v not in taken]
+            if len(g_free) == 1 and len(n_free) == 1 and link(g_free[0], n_free[0]):
+                changed = True
+
+    # A GT variable no GT step uses is a GT mistake (flagged in gt_issues), not something the GEN can miss.
+    used = _used_vars(gt)
+    missing = [g for g in gt.variables if g not in same_value and g in used]
+    mismatched = {g: pairs[g] for g in missing if g in pairs}
     unpaired_gen = [n for n in gen.variables if n not in taken]
-    return VariableResult(pairs, missing, unpaired_gen)
+    return VariableResult(pairs, missing, unpaired_gen, mismatched)
+
+
+def _used_vars(script: Script) -> Set[str]:
+    used: Set[str] = set()
+    for a in script.actions:
+        used.update(a.all_vars())
+    for b in script.blocks:
+        used.update(v for v in (b.var, b.rhs_var, b.list_var) if v)
+        used.update(vars_in(b.condition) + vars_in(b.text if b.malformed else ""))
+    return used
+
+
+def _same_kind(gt: Script, g: str, gen: Script, n: str) -> bool:
+    """Input variables pair only with input variables of the same kind; loop and GRAB variables with each other."""
+    gk = gt.variables[g].kind if g in gt.variables else "local"
+    nk = gen.variables[n].kind if n in gen.variables else "local"
+    return gk == nk or ("empty" in (gk, nk) and "local" not in (gk, nk))
 
 
 def _norm_value(v):
@@ -96,11 +143,11 @@ def step_variables_ok(gt_step: Action, gen_step: Action, gt: Script, var_pairs: 
         return False, reason + (f"; hard-coded {hc}" if hc else "")
     expected = {var_pairs[v] for v in gt_vars}
     if expected != gen_vars:
+        hc = _hard_coded(gt_step, gen_step, gt)
         return False, (f"expected {sorted('$' + v for v in expected)}, "
-                       f"GEN uses {sorted('$' + v for v in gen_vars)}")
-    hc = _hard_coded(gt_step, gen_step, gt)
-    if hc:
-        return False, f"hard-coded {hc}"
+                       f"GEN uses {sorted('$' + v for v in gen_vars)}" + (f"; hard-coded {hc}" if hc else ""))
+    # GEN uses exactly the mapped variables, so nothing is hard-coded: a GT value such as "User" that also
+    # appears as an ordinary word in the GEN element text is not a hard-coded value.
     return True, ""
 
 
@@ -194,6 +241,10 @@ def check_blocks(gt: Script, gen: Script, mapping: Mapping, var_pairs: Dict[str,
     used: Set[str] = set()
     results = []
     for gb in gt.blocks:
+        if gb.malformed:     # the GT block itself is not valid redflow: flagged in gt_issues, not charged to the GEN
+            results.append(BlockResult(gb.id, gb.kind, gb.condition_text(), None, True,
+                                       "not checked: this GT block is not valid redflow (GT flagged)"))
+            continue
         cands = [nb for nb in gen.blocks if nb.kind == gb.kind and nb.id not in used]
         same_cond = [nb for nb in cands if _condition_same(gb, nb, var_pairs, runtime)]
         if not cands:

@@ -1,0 +1,37 @@
+# Double check the URL
+URL "https://fivetran.com/dashboard/account/users-permissions/users"
+STEPS
+    - CLICK ON "Filter by role dropdown" INTENT "Open the role filter dropdown"
+    - CLICK ON "Account Administrator" INTENT "Filter users to show only Account Administrators"
+RESOURCE: "Users" IDENTIFIED_BY "email"
+EXTRACT
+    FROM LIST
+        - "name" INSTRUCT "Name in the Name column"
+        - "email" INSTRUCT "Email in the Email column"
+        - "assigned_account_role" INSTRUCT "Role in the Assigned account role column" POSSIBLE_VALUES ["Account Administrator", "Account Analyst", "Account Billing", "Account Reviewer", "Destination Creator", "No Account Role"]
+        - "team" INSTRUCT "Team in the Team column"
+        STEPS
+            - CLICK ON "name" INTENT "Open user detail page"
+        EXTRACT
+            FROM DETAILS
+                - "account_role" INSTRUCT "Account role under ACCOUNT ROLE section"
+                - "team_memberships"[] INSTRUCT "Team name under TEAM MEMBERSHIPS section"
+        STEPS
+            - CLICK ON "Destinations tab" INTENT "Switch to Destinations tab"
+        RESOURCE "destinations"
+        EXTRACT
+            FROM LIST
+                - "destination_name" INSTRUCT "Name in the Name column"
+                - "destination_type" INSTRUCT "Type in the Type column"
+                - "destination_permission" INSTRUCT "Permission in the Destination permission column"
+                - "permission_source" INSTRUCT "Source in the Permission source column"
+        STEPS
+            - CLICK ON "Connections tab" INTENT "Switch to Connections tab"
+        RESOURCE "connections"
+        EXTRACT
+            FROM LIST
+                - "connection_name" INSTRUCT "Name in the Connection name column"
+                - "source_type" INSTRUCT "Type in the Source type column"
+                - "destination" INSTRUCT "Destination in the Destination column"
+                - "connection_permission" INSTRUCT "Permission in the Connection permission column"
+                - "permission_source" INSTRUCT "Source in the Permission source column"

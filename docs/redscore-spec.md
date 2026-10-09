@@ -43,7 +43,9 @@ Steps 1 to 5 run once for each generated redflow; step 6 combines the 3 runs of 
 
 ### Step 1: Syntax validation
 
-Run the redflow validator on GEN. Any error means GEN cannot run: that run's Final Score is 0 and steps 2 to 5 are skipped.
+Run the redflow validator on GEN. Any error means GEN cannot run: that run's Final Score is 0. Steps 2 to 5 still run on it (decided 2026-10-06), so its step points, Base Score and penalties are kept for improving the generator, together with the **Final if runnable**, the Final it would have without the syntax error. A GEN line that is not valid redflow is still kept as a step, so a typo costs only the points that step gets wrong.
+
+The GT is validated too, but a GT error never stops scoring and the GT file is never edited (decided 2026-10-06). Each GT error is flagged with the GT step it is on, and travels with every score of that task. A GT step line that is not valid redflow is still kept, built from its keyword, quoted element, variables and INTENT, so the GEN is scored against the step the author meant. A GT logic block whose header is not valid redflow is not checked, so it costs the GEN nothing. A variable the GT defines but never uses is a GT mistake, so it is not charged to the GEN as a missing variable.
 
 ### Step 2: Map steps and variables
 
@@ -56,7 +58,7 @@ One LLM call (fixed model, temperature 0) receives both redflows with numbered s
 
 Code then does three checks:
 
-- **Variables:** pair each GEN variable with the GT variable that has the same default value, e.g. `$first_name = "john"` with `$legal_first_name = "john"`. A GT variable with no partner is a **missing variable**.
+- **Variables:** pair each GEN variable with the GT variable that has the same default value, e.g. `$first_name = "john"` with `$legal_first_name = "john"`. A GT variable with no same-value partner is a **missing variable**. If the GEN variable that does the same job has a different value (for example, the sample email was misread from the video), the two are still paired through the mapped steps and loops that use them. The wrong value then costs only the missing-variable penalty, not the steps and logic blocks that use the variable as well (decided 2026-10-06).
 - **Sequence:** read the pairs in GT order. The GEN step numbers must keep rising; a pair where the number drops is **out of sequence**.
 - **Logic blocks:** every IF/ELSE, FOR\_EACH, WHEN, UNTIL and WAIT\_UNTIL in GT must exist in GEN with the same condition, and its steps must sit inside it.
 
@@ -103,6 +105,8 @@ A missing step already scores 0 in the Base Score. Its penalty covers what it br
 ```
 
 Also record the lowest of the 3 Final Scores, to see how unstable the generator is.
+
+A run that could not be scored (the mapping LLM or the disk failed) is not a 0: it is recorded as not scored, and the task gets no Task Score until every run is scored. Only a syntax failure scores 0.
 
 ## Worked example: Venus-JML Create Account
 
@@ -220,14 +224,17 @@ Every generator version runs the same set of tasks, 3 runs each, and is reported
 | Benchmark number | How it is computed |
 | --- | --- |
 | Mean Task Score | average Task Score across all tasks |
-| Mean Base Score | shows step capture on its own, before penalties |
+| Mean Base Score | shows step capture on its own, before penalties (syntax-failed runs included) |
+| Mean Final if runnable | average Final the runs would have without syntax errors: quality apart from syntax cliffs |
 | Penalties by type | total points lost to sequence, variables, logic blocks and critical steps |
 | Syntax failures | runs that scored 0 at step 1 |
 | Critical-step misses | runs that lost the final Invite, Save or Submit; any increase is a regression |
 
 Compare a new version with the previous one task by task. A change counts as real only if the 95% bootstrap interval of the per-task differences excludes 0. List every task that got better or worse, so an average gain cannot hide a drop on one Skill.
 
-Store every GEN redflow, its mapping, and the version of the weights and penalties. When the rules change, re-score the stored GENs, so all versions stay on one scale.
+Store every GEN redflow, its mapping, the GT it was scored against, and the version of the weights and penalties. When the rules change, re-score the stored GENs, so all versions stay on one scale.
+
+Two versions are compared only if they were measured on the same scale: the same rules file content, the same mapping judge (model and prompt) and the same scoring code. A task is compared only if both versions scored it completely, against the same GT. Anything else is refused or listed as not compared, never silently averaged in.
 
 ## Open decisions
 

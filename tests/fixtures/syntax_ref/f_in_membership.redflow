@@ -1,0 +1,9 @@
+URL "https://x.example.com"
+STEPS
+    - IF $region IN $eu_regions
+        - CLICK ON "GDPR consent checkbox" INTENT "Enable GDPR consent for $region"
+    - ELSE
+        - CLICK ON "Standard terms checkbox" INTENT "Accept standard terms"
+
+$region = "Germany"
+$eu_regions = ["Germany", "France", "Spain"]

@@ -78,6 +78,28 @@ def test_llm_cache_ignores_blank_lines_and_comments(env, monkeypatch):
     assert len(calls) == 2
 
 
+def test_refresh_asks_again_and_keeps_the_previous_answer(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "_chat", lambda model, messages: calls.append(1) or json.dumps(GOOD))
+    llm.llm_mapper(cache_dir=env / "cache")(GT, GEN)
+    m = llm.llm_mapper(cache_dir=env / "cache", refresh=True)(GT, GEN)
+    assert len(calls) == 2 and m.meta["cache"] == "refresh"
+    assert len(list((env / "cache" / "replaced").glob("*.json"))) == 1
+    assert llm.llm_mapper(cache_dir=env / "cache")(GT, GEN).meta["cache"] == "hit"   # the new answer is cached
+
+
+def test_corrupt_cache_entry_is_set_aside_and_remapped(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "_chat", lambda model, messages: calls.append(1) or json.dumps(GOOD))
+    mapper = llm.llm_mapper(cache_dir=env / "cache")
+    mapper(GT, GEN)
+    (entry,) = (env / "cache").glob("*.json")
+    entry.write_text('{"meta": {}, "data": {"pa')            # truncated by a crash
+    assert mapper(GT, GEN).meta["cache"] == "miss" and len(calls) == 2
+    assert entry.with_suffix(".corrupt").exists() and json.loads(entry.read_text())["data"] == GOOD
+    assert mapper.judge.startswith("llm:test-model@mapping_v1@")
+
+
 def test_llm_mapper_retries_once_with_error(env, monkeypatch):
     answers = ['{"pairs": [{"gt": 1, "gen": 99, "same_element": true, "same_intent": true}]}', json.dumps(GOOD)]
     seen = []

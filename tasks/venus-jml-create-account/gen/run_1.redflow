@@ -1,0 +1,14 @@
+STEPS
+    - CLICK ON "Invite user button at top right" INTENT "Open the invite user form"
+    - FILL $first_name INTO "First name input" INTENT "Enter $first_name"
+    - FILL_AND_ENTER $last_name INTO "Last name input" INTENT "Enter $last_name"
+    - CLICK ON "Next button" INTENT "Go to role selection"
+    - FILL $user_email INTO "Email input" INTENT "Enter $user_email"
+    - CLICK ON "Admin radio button" INTENT "Select the Admin role"
+    - CLICK ON "Next button" INTENT "Continue"
+    - CLICK ON "Invite button" INTENT "Send the invitation"
+    - CLICK ON "Close button on the success dialog" INTENT "Close the confirmation"
+
+$user_email = "john1@redblockdemo.com"
+$first_name = "john"
+$last_name = "smith"

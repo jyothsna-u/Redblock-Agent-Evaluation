@@ -48,9 +48,11 @@ STEPS
 $var = "default value"
 ```
 
-- Actions: `CLICK`, `FILL`, `FILL_AND_ENTER`, `SELECT`, `HOVER` (+ `GOTO` inside STEPS for extraction).
-- Static control flow: `IF / ELSE` (`EQUALS`/`==`, `NOT_EQUALS`/`!=`, `EXISTS` for scalars,
-  `EMPTY`/`NOT_EMPTY` for lists), `FOR_EACH $x IN $list`.
+- Actions: `CLICK`, `DOUBLE_CLICK`, `RIGHT_CLICK`, `HOVER`, `FILL`, `FILL_AND_ENTER`, `SELECT`, `UPLOAD`, `GOTO`,
+  `WAIT n`, `BROWSER_FIND $var`, `GRAB` / `GRAB ALL` (syntax reference updated 2026-10-05).
+- Static control flow: `IF / ELIF / ELSE` (`EQUALS`, `NOT_EQUALS` — `==`/`!=` are no longer supported — `EXISTS`
+  for scalars, `EMPTY`/`NOT_EMPTY` for lists, `IN $list`), `FOR_EACH $x IN $list [EXECUTE_PARALLEL]`, map loops
+  `FOR_EACH $key, $value IN $map`.
 - Runtime AI control flow: `WHEN "<page state>"` (+ELSE), `UNTIL "<page state>"` (loop with body),
   `WAIT_UNTIL "<page state>"` (no body).
 - Variables: snake_case, defined at bottom; list `["a","b"]`; optional `$x? = EMPTY`.

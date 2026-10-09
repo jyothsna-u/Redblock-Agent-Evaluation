@@ -1,0 +1,20 @@
+URL "https://app.hubspot.com/settings/users"
+
+STEPS
+    - FILL_AND_ENTER $user_email INTO "User Search Bar" INTENT "Find the user by $user_email"
+    - HOVER ON "User Row" INTENT "Reveal the edit options"
+    - CLICK ON "Edit Permissions" INTENT "Open permissions for editing"
+
+    # Check if a new role is provided
+    - IF $new_role EXISTS
+        - CLICK ON "Role Dropdown" INTENT "Open the role selector"
+        - SELECT $new_role FROM "Role List" INTENT "Change the user's role to $new_role"
+
+    - IF $is_manager EQUALS "True"
+        - CLICK ON "Team Management Toggle" INTENT "Enable management access because $is_manager is True"
+
+    - CLICK ON "Save Preferences" INTENT "Confirm the changes"
+
+$user_email = "bob.jones@acme.com"
+$new_role = "Marketing Director"
+$is_manager = "True"
